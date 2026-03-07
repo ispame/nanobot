@@ -1,0 +1,14 @@
+{
+  "allowed_ids": ["alice", "bob", "charlie"],
+  "admin_ids": ["admin"],
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "session_secret": "change-this-secret-key-in-production"
+  },
+  "nanobot": {
+    "path": "/Users/spame/WorkTable/openclaw_coder/nanobot",
+    "config_path": "~/.nanobot/config.json",
+    "workspace_path": "~/.nanobot/workspace"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "user_id": "alice",
+  "password_hash": "acd2d8781d388b89494c766e984810fb52e3ef2537581334c4510583a643ab9c",
+  "salt": "f0e815c244e49fb1c078d0f286c65e82",
+  "is_admin": false
+}
