@@ -20,6 +20,7 @@
 
 ## 📢 News
 
+- **2026-03-07** 🌐 Added **Web Channel** — integrated web chat UI directly into nanobot gateway. Now you can chat with nanobot via browser at `http://localhost:1105/chat`! (If you only need the standalone web chat, see [web_chat/README.md](./web_chat/README.md) for details.)
 - **2026-02-28** 🚀 Released **v0.1.4.post3** — cleaner context, hardened session history, and smarter agent. Please see [release notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.4.post3) for details.
 - **2026-02-27** 🧠 Experimental thinking mode support, DingTalk media messages, Feishu and QQ channel fixes.
 - **2026-02-26** 🛡️ Session poisoning fix, WhatsApp dedup, Windows path guard, Mistral compatibility.
@@ -177,6 +178,7 @@ Connect nanobot to your favorite chat platform.
 | **Slack** | Bot token + App-Level token |
 | **Email** | IMAP/SMTP credentials |
 | **QQ** | App ID + App Secret |
+| **Web** | Built-in web interface |
 
 <details>
 <summary><b>Telegram</b> (Recommended)</summary>
@@ -633,6 +635,59 @@ Give nanobot its own email account. It polls **IMAP** for incoming mail and repl
 ```bash
 nanobot gateway
 ```
+
+</details>
+
+<details>
+<summary><b>Web (内置网页聊天)</b></summary>
+
+内置网页聊天界面，通过浏览器直接与 nanobot 对话。
+
+**1. 配置**
+
+在 `~/.nanobot/config.json` 中添加：
+
+```json
+{
+  "channels": {
+    "web": {
+      "enabled": true,
+      "host": "0.0.0.0",
+      "port": 1105,
+      "sessionSecret": "your-secret-key-change-this",
+      "allowedIds": ["alice", "bob"],
+      "adminIds": ["admin"],
+      "allowFrom": ["*"]
+    }
+  }
+}
+```
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `enabled` | `false` | 是否启用 Web 频道 |
+| `host` | `"0.0.0.0"` | 监听地址 |
+| `port` | `8000` | 监听端口 |
+| `sessionSecret` | `"dev-secret-change-me"` | Session 加密密钥，请改为随机字符串 |
+| `allowedIds` | `[]` | 允许注册的用户 ID（空 = 允许所有） |
+| `adminIds` | `[]` | 管理员用户 ID |
+| `allowFrom` | `[]` | 允许访问的用户 ID（空 = 拒绝所有） |
+| `nanobotConfigPath` | `"~/.nanobot/config.json"` | Nanobot 配置文件路径 |
+| `nanobotWorkspacePath` | `"~/.nanobot/workspace"` | Nanobot 工作空间路径 |
+
+**2. 运行**
+
+```bash
+nanobot gateway
+```
+
+**3. 访问**
+
+打开浏览器访问 `http://localhost:8000/chat`
+
+首次访问需要注册账号（如果 `allowedIds` 不为空，则只能注册列表中的用户），登录后即可对话。
+
+> 注意：如果 `allowFrom` 为空，将拒绝所有用户请求。请设置为 `["*"]` 或具体的用户 ID。
 
 </details>
 
