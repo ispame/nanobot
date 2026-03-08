@@ -20,16 +20,25 @@ pip install python-miio
 
 小爱音响需要通过 IP 和 Token 进行连接。以下是获取 Token 的方法：
 
-#### 方法一：miio-ndiscover 工具（推荐）
+#### 方法一：arp-scan 工具（推荐）
 
 ```bash
-pip install miio
-miio-ndiscover
+# 安装
+brew install arp-scan
+
+# 扫描局域网
+sudo arp-scan --localnet
 ```
 
-这会扫描局域网内的小米设备，列出所有在线设备的 IP 和 Token。
+这会列出所有在线设备的 IP 和 MAC 地址。小米设备的 MAC 地址通常以以下前缀开头：`34:80:b3`、`64:09:73`、`68:df:dd`、`74:23:3c`、`78:02:f8`、`7c:1d:d9`、`b0:e2:35`、`bc8:cd:72`、`c0:83:0a`、`d8:f5:31`。
 
-#### 方法二：从米家 APP 导出
+如果不想安装额外工具，也可以直接查看系统 ARP 缓存：
+
+```bash
+arp -a
+```
+
+#### 方法三：从米家 APP 导出
 
 1. 打开 **米家 APP**
 2. 点击右下角 **我的** → **设置** → **关于**
@@ -37,7 +46,7 @@ miio-ndiscover
 4. 返回设置页面，会出现 **导出设备共享密钥** 的选项
 5. 导出的文件包含各设备的 Token
 
-#### 方法三：Python 脚本
+#### 方法四：Python 脚本
 
 ```python
 from miio import Device
