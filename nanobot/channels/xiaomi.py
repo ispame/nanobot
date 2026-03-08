@@ -1,7 +1,6 @@
 """Xiaomi (Xiao AI) speaker channel implementation."""
 
 import asyncio
-import tempfile
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -12,12 +11,12 @@ from nanobot.channels.base import BaseChannel
 from nanobot.config.schema import XiaomiConfig
 
 try:
-    from miio import Device
+    from nanobot.services.miot import MiOTService
 
-    MIIO_AVAILABLE = True
+    MIOT_AVAILABLE = True
 except ImportError:
-    MIIO_AVAILABLE = False
-    Device = None
+    MIOT_AVAILABLE = False
+    MiOTService = None
 
 
 class ResponseRouter:
@@ -35,11 +34,11 @@ class ResponseRouter:
         Returns:
             True if TTS should be used, False for Feishu.
         """
-        # 1. Short text → TTS
+        # 1. Short text -> TTS
         if len(content) < threshold:
             return True
 
-        # 2. Complex content indicators → Feishu
+        # 2. Complex content indicators -> Feishu
         complex_indicators = ["```", "|", "\n- ", "\n1. ", "\n2. "]
         if any(indicator in content for indicator in complex_indicators):
             return False
@@ -49,7 +48,7 @@ class ResponseRouter:
 
 
 class XiaomiChannel(BaseChannel):
-    """Xiaomi Xiao AI speaker channel using miio library."""
+    """Xiaomi Xiao AI speaker channel using MiOT service."""
 
     name = "xiaomi"
 
@@ -57,7 +56,7 @@ class XiaomiChannel(BaseChannel):
         super().__init__(config, bus)
         self.config: XiaomiConfig = config
         self.groq_api_key = groq_api_key
-        self._device: Device | None = None
+        self._miot: MiOTService | None = None
         self._running = False
         self._poll_task: asyncio.Task | None = None
         self._last_voice_id: str = ""
@@ -65,20 +64,46 @@ class XiaomiChannel(BaseChannel):
 
     async def start(self) -> None:
         """Start the Xiaomi channel and begin polling for voice input."""
-        if not MIIO_AVAILABLE:
-            logger.error("miio not installed. Run: pip install miio")
+        if not MIOT_AVAILABLE:
+            logger.error("MiOT service not available. Please ensure httpx is installed.")
             return
 
-        if not self.config.ip or not self.config.token:
-            logger.error("Xiaomi: IP and token not configured")
+        if not self.config.user_id or not self.config.pass_token:
+            logger.error("Xiaomi: userId and passToken not configured")
             return
 
-        # Initialize miio device
+        if not self.config.device_name:
+            logger.error("Xiaomi: deviceName not configured")
+            return
+
+        # Initialize MiOT service
         try:
-            self._device = Device(self.config.ip, self.config.token)
-            logger.info("Xiaomi: Connected to device at {}", self.config.ip)
+            self._miot = MiOTService(
+                user_id=self.config.user_id,
+                pass_token=self.config.pass_token,
+                device_name=self.config.device_name,
+            )
+
+            # Login to Xiaomi account
+            login_success = await self._miot.login()
+            if not login_success:
+                logger.error("Xiaomi: Failed to login to Xiaomi account")
+                return
+
+            # Find the device
+            device = await self._miot.find_device()
+            if not device:
+                logger.error("Xiaomi: Device not found: {}", self.config.device_name)
+                return
+
+            logger.info(
+                "Xiaomi: Connected to device: {} (did: {})",
+                device.get("name"),
+                device.get("did")
+            )
+
         except Exception as e:
-            logger.error("Xiaomi: Failed to connect to device: {}", e)
+            logger.error("Xiaomi: Failed to initialize: {}", e)
             return
 
         # Initialize transcription provider
@@ -100,14 +125,18 @@ class XiaomiChannel(BaseChannel):
                 await self._poll_task
             except asyncio.CancelledError:
                 pass
+
+        if self._miot:
+            await self._miot.close()
+
         logger.info("Xiaomi: Channel stopped")
 
     async def send(self, msg: OutboundMessage) -> None:
         """
         Send a message - either via TTS or Feishu based on content complexity.
         """
-        if not self._device:
-            logger.warning("Xiaomi: Device not connected")
+        if not self._miot or not self._miot.is_logged_in:
+            logger.warning("Xiaomi: Not connected")
             return
 
         content = msg.content or ""
@@ -125,10 +154,16 @@ class XiaomiChannel(BaseChannel):
 
     async def _send_via_tts(self, content: str) -> None:
         """Send content via TTS on the Xiaomi speaker."""
+        if not self._miot:
+            return
+
         try:
-            # Use miio play_text for TTS
-            self._device.play_text(content)
-            logger.debug("Xiaomi: TTS played: {} chars", len(content))
+            # Use MiOT TTS
+            success = await self._miot.play_tts(content)
+            if success:
+                logger.debug("Xiaomi: TTS played: {} chars", len(content))
+            else:
+                logger.error("Xiaomi: TTS playback failed")
         except Exception as e:
             logger.error("Xiaomi: TTS error: {}", e)
 
@@ -173,24 +208,16 @@ class XiaomiChannel(BaseChannel):
         # 2. Get the recorded audio file
         # 3. Transcribe and process
 
-        if not self._device:
+        if not self._miot:
             return
 
-        try:
-            # Get device status - this is a simplified approach
-            # In practice, we'd need to check for new voice recordings
-            # or use a specific API endpoint
-            status = self._device.status()
-            logger.trace("Xiaomi: Device status: {}", status)
+        # TODO: Implement actual voice input detection
+        # This typically requires:
+        # 1. Setting up a custom voice command that triggers HTTP callback
+        # 2. Or polling the device's voice memo API
+        # 3. Or using the MiOT voice recording functionality
 
-            # TODO: Implement actual voice input detection
-            # This typically requires:
-            # 1. Setting up a custom voice command that triggers HTTP callback
-            # 2. Or polling the device's voice memo API
-            # 3. Or using the miio voice recording functionality
-
-        except Exception as e:
-            logger.trace("Xiaomi: Status check: {}", e)
+        logger.trace("Xiaomi: Checking for voice input...")
 
     async def _process_voice_input(self, audio_path: str) -> None:
         """Process voice input: transcribe and send to message bus."""
@@ -229,7 +256,7 @@ class XiaomiChannel(BaseChannel):
         # the specific Xiaomi device capabilities and API access
         #
         # Possible approaches:
-        # 1. Use miio's get_file to fetch voice memos
+        # 1. Use MiOT's get_file to fetch voice memos
         # 2. Use custom skill that saves recordings to accessible location
         # 3. Use HTTP callback for custom voice commands
 
