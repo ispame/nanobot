@@ -169,6 +169,18 @@ class QQConfig(Base):
     allow_from: list[str] = Field(default_factory=list)  # Allowed user openids (empty = public access)
 
 
+class XiaomiConfig(Base):
+    """Xiaomi (Xiao AI) speaker channel configuration."""
+
+    enabled: bool = False
+    ip: str = ""  # Device IP address
+    token: str = ""  # Device token (32 chars)
+    feishu_reply_enabled: bool = True  # Send complex responses via Feishu
+    simple_response_length_threshold: int = 100  # Max length for TTS response
+    allow_from: list[str] = Field(default_factory=list)  # Allowed user IDs (currently only supports single user "default")
+    poll_interval_seconds: int = 2  # How often to check for new voice input
+
+
 class WebChannelConfig(Base):
     """Web chat channel configuration."""
 
@@ -215,6 +227,7 @@ class ChannelsConfig(Base):
     email: EmailConfig = Field(default_factory=EmailConfig)
     slack: SlackConfig = Field(default_factory=SlackConfig)
     qq: QQConfig = Field(default_factory=QQConfig)
+    xiaomi: XiaomiConfig = Field(default_factory=XiaomiConfig)
     web: WebChannelConfig = Field(default_factory=WebChannelConfig)
     matrix: MatrixConfig = Field(default_factory=MatrixConfig)
 

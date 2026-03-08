@@ -137,6 +137,19 @@ class ChannelManager:
             except ImportError as e:
                 logger.warning("QQ channel not available: {}", e)
 
+        # Xiaomi channel
+        if self.config.channels.xiaomi.enabled:
+            try:
+                from nanobot.channels.xiaomi import XiaomiChannel
+                self.channels["xiaomi"] = XiaomiChannel(
+                    self.config.channels.xiaomi,
+                    self.bus,
+                    groq_api_key=self.config.providers.groq.api_key,
+                )
+                logger.info("Xiaomi channel enabled")
+            except ImportError as e:
+                logger.warning("Xiaomi channel not available: {}", e)
+
         # Matrix channel
         if self.config.channels.matrix.enabled:
             try:
