@@ -179,6 +179,7 @@ Connect nanobot to your favorite chat platform.
 | **Email** | IMAP/SMTP credentials |
 | **QQ** | App ID + App Secret |
 | **Web** | Built-in web interface |
+| **小爱音响** | IP + Token ([获取指南](./nanobot/channels/xiaomi.md)) |
 
 <details>
 <summary><b>Telegram</b> (Recommended)</summary>
@@ -688,6 +689,44 @@ nanobot gateway
 首次访问需要注册账号（如果 `allowedIds` 不为空，则只能注册列表中的用户），登录后即可对话。
 
 > 注意：如果 `allowFrom` 为空，将拒绝所有用户请求。请设置为 `["*"]` 或具体的用户 ID。
+
+</details>
+
+<details>
+<summary><b>小爱音响 (Xiaomi Xiao AI)</b></summary>
+
+通过小爱音响进行语音对话，简单问题直接语音回复，复杂内容转发飞书。
+
+详细接入指南请查看：[小爱音响接入指南](./nanobot/channels/xiaomi.md)
+
+**1. 准备工作**
+
+- 安装依赖：`pip install miio`
+- 获取设备 Token（详见接入指南）
+
+**2. 配置**
+
+```json
+{
+  "channels": {
+    "xiaomi": {
+      "enabled": true,
+      "ip": "192.168.1.100",
+      "token": "your_32_char_token",
+      "feishuReplyEnabled": true,
+      "allowFrom": ["default"]
+    }
+  }
+}
+```
+
+**3. 运行**
+
+```bash
+nanobot gateway
+```
+
+> 详细说明见 [接入指南](./nanobot/channels/xiaomi.md)
 
 </details>
 
