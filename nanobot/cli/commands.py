@@ -195,6 +195,83 @@ def onboard():
     console.print("\n[dim]Want Telegram/WhatsApp? See: https://github.com/HKUDS/nanobot#-chat-apps[/dim]")
 
 
+@app.command()
+def miot_devices(
+    user_id: str = typer.Option(..., "--user-id", "-u", help="Xiaomi user ID"),
+    pass_token: str = typer.Option(..., "--pass-token", "-p", help="Xiaomi passToken or password"),
+    device_name: str | None = typer.Option(None, "--device-name", "-d", help="Device name to find (optional)"),
+):
+    """List Xiaomi devices and test MiOT authentication."""
+    from nanobot.services.miot import MiOTService
+
+    async def run():
+        service = MiOTService(
+            user_id=user_id,
+            pass_token=pass_token,
+            device_name=device_name or "",
+        )
+
+        console.print("\n[bold]1. Logging in...[/bold]")
+        login_result = await service.login()
+
+        if not login_result:
+            console.print("[red]✗ Login failed![/red]")
+            await service.close()
+            return
+
+        console.print("[green]✓ Login successful![/green]")
+
+        console.print("\n[bold]2. Fetching device list...[/bold]")
+        devices = await service.get_device_list()
+
+        if not devices:
+            console.print("[yellow]No devices found![/yellow]")
+            await service.close()
+            return
+
+        console.print(f"[green]✓ Found {len(devices)} devices:[/green]\n")
+
+        # Show device table
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Name")
+        table.add_column("DID")
+        table.add_column("Type")
+        table.add_column("Model")
+
+        for device in devices:
+            table.add_row(
+                device.get("name", ""),
+                device.get("did", ""),
+                device.get("deviceType", ""),
+                device.get("model", ""),
+            )
+
+        console.print(table)
+
+        # If device_name specified, try to find it
+        if device_name:
+            console.print(f"\n[bold]3. Looking for device: {device_name}[/bold]")
+            device = await service.find_device()
+
+            if device:
+                console.print(f"[green]✓ Found: {device.get('name')} (did: {device.get('did')})[/green]")
+
+                # Test TTS
+                console.print("\n[bold]4. Testing TTS...[/bold]")
+                tts_result = await service.play_tts("测试语音播放")
+
+                if tts_result:
+                    console.print("[green]✓ TTS test successful![/green]")
+                else:
+                    console.print("[red]✗ TTS test failed![/red]")
+            else:
+                console.print(f"[red]✗ Device '{device_name}' not found![/red]")
+
+        await service.close()
+
+    asyncio.run(run())
+
+
 
 
 
