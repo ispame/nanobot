@@ -701,7 +701,7 @@ nanobot gateway
 
 **1. 准备工作**
 
-- 安装依赖：`pip install miio`
+- 安装依赖：`pip install python-miio`
 - 获取设备 Token（详见接入指南）
 
 **2. 配置**

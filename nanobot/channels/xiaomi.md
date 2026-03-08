@@ -13,7 +13,7 @@
 ### 1. 安装依赖
 
 ```bash
-pip install miio
+pip install python-miio
 ```
 
 ### 2. 获取设备 Token
