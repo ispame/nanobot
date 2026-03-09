@@ -496,7 +496,6 @@ class MiOTService:
 
             if response.status_code == 200:
                 result = response.json()
-                logger.debug("Conversation response: {}", result)
                 if result.get("code") == 0:
                     data = result.get("data")
                     # Data is a JSON string, need to parse it
@@ -505,7 +504,6 @@ class MiOTService:
                         data = json_mod.loads(data)
 
                     records = data.get("records", []) if isinstance(data, dict) else []
-                    logger.debug("Got {} conversation records", len(records))
 
                     # Transform to simpler format
                     conversations = []
@@ -534,7 +532,6 @@ class MiOTService:
                 else:
                     logger.warning("Conversation history API returned code: {}", result.get("code"))
 
-            logger.debug("Conversation history request: {} - {}", response.status_code, response.text[:200])
             return []
 
         except Exception as e:
