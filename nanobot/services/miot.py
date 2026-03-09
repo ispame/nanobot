@@ -12,6 +12,7 @@ import gzip
 import hashlib
 import json
 import random
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -284,16 +285,13 @@ class MiOTService:
             return False
 
         try:
-            url = f"{self.MINA_API}/remote/ubus"
+            # Try MiNA play method first (preferred)
+            url = f"{self.MINA_API}/v2/mipush"
 
-            # Build request like migpt-next
             payload = {
                 "deviceId": self._device_info.get("deviceId"),
-                "path": "mediaplayer",
-                "method": "tts_play",
-                "message": json.dumps({"text": text}),
-                "requestId": str(uuid.uuid4()),
-                "timestamp": int(self._device_info.get("timestamp", 0) or 0) or int(__import__("time").time()),
+                "method": "play",
+                "params": json.dumps({"tts": text}),
             }
 
             headers = {
@@ -306,16 +304,31 @@ class MiOTService:
 
             if response.status_code == 200:
                 result = response.json()
-                logger.info("TTS sent: {}", result)
-                # Check device response
-                if result.get("code") == 0:
-                    return True
-                else:
-                    logger.warning("TTS device response: {}", result.get("message"))
-                    return False
-            else:
-                logger.error("TTS failed: {} - {}", response.status_code, response.text)
-                return False
+                logger.info("TTS sent via MiNA: {}", result)
+                return result.get("code") == 0
+
+            logger.warning("MiNA play failed, trying tts_play: {} - {}", response.status_code, response.text)
+
+            # Fallback to tts_play
+            url2 = f"{self.MINA_API}/remote/ubus"
+            payload2 = {
+                "deviceId": self._device_info.get("deviceId"),
+                "path": "mediaplayer",
+                "method": "tts_play",
+                "message": json.dumps({"text": text}),
+                "requestId": str(uuid.uuid4()),
+                "timestamp": int(time.time()),
+            }
+
+            response2 = await self._client.post(url2, data=payload2, headers=headers)
+
+            if response2.status_code == 200:
+                result2 = response2.json()
+                logger.info("TTS sent via tts_play: {}", result2)
+                return result2.get("code") == 0
+
+            logger.error("TTS failed: {} - {}", response2.status_code, response2.text)
+            return False
 
         except Exception as e:
             logger.error("MiOT TTS error: {}", e)
@@ -335,21 +348,28 @@ class MiOTService:
             return False
 
         try:
-            url = f"{self.API_BASE}/miotspecs/action"
+            url = f"{self.API_BASE}/miotspec/action"
             did = self._device_info.get("did") or self._did
 
+            # Format matches mi-service-lite: params + datasource
             payload = {
-                "did": did,
-                "siid": siid,
-                "aiid": aiid,
-                "in": args if isinstance(args, list) else [args] if args else [],
+                "params": json.dumps({
+                    "did": did,
+                    "siid": siid,
+                    "aiid": aiid,
+                    "in": args if isinstance(args, list) else [args] if args else [],
+                }),
+                "datasource": 2,
             }
 
-            signed_payload = encode_miot("POST", "/miotspecs/action", payload, self._ssecurity)
+            signed_payload = encode_miot("POST", "/miotspec/action", payload, self._ssecurity)
 
             headers = {
                 "User-Agent": "MICO/AndroidApp/@SHIP.TO.2A2FE0D7@/2.4.40",
                 "x-xiaomi-protocal-flag-cli": "PROTOCAL-HTTP2",
+                "miot-accept-encoding": "GZIP",
+                "miot-encrypt-algorithm": "ENCRYPT-RC4",
+                "Content-Type": "application/x-www-form-urlencoded",
                 "Cookie": self._build_miot_cookies(),
             }
 
