@@ -308,15 +308,15 @@ class MiOTService:
                 # Consider success if HTTP 200 (code 0 or 101 may both work)
                 return result.get("code") in [0, 101]
 
-            logger.warning("MiNA play failed, trying tts_play: {} - {}", response.status_code, response.text)
+            logger.warning("MiNA play failed, trying mibrain text_to_speech: {} - {}", response.status_code, response.text)
 
-            # Fallback to tts_play
+            # Fallback to mibrain text_to_speech (like migpt-next)
             url2 = f"{self.MINA_API}/remote/ubus"
             payload2 = {
                 "deviceId": self._device_info.get("deviceId"),
-                "path": "mediaplayer",
-                "method": "tts_play",
-                "message": json.dumps({"text": text}),
+                "path": "mibrain",
+                "method": "text_to_speech",
+                "message": json.dumps({"text": text, "save": 0}),
                 "requestId": str(uuid.uuid4()),
                 "timestamp": int(time.time()),
             }
