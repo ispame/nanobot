@@ -7,12 +7,13 @@ and device control (TTS, status, etc.).
 Based on the migpt-next TypeScript implementation.
 """
 
+import base64
+import gzip
 import hashlib
-import hmac
 import json
 import random
-import time
-from base64 import b64decode, b64encode
+import uuid
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -20,84 +21,104 @@ import httpx
 from loguru import logger
 
 
-def md5(data: str) -> str:
-    """Calculate MD5 hash."""
-    return hashlib.md5(data.encode()).hexdigest()
+def sign_nonce(ssecurity: str, nonce: str) -> str:
+    """Sign nonce with ssecurity."""
+    ssecurity_bytes = base64.b64decode(ssecurity)
+    # If nonce is numeric string, encode it differently
+    try:
+        nonce_bytes = str(nonce).encode('utf-8')
+    except:
+        nonce_bytes = nonce
+    h = hashlib.sha256()
+    h.update(ssecurity_bytes)
+    h.update(nonce_bytes)
+    return base64.b64encode(h.digest()).decode()
 
 
-def sha1(data: str) -> str:
-    """Calculate SHA1 hash."""
-    return hashlib.sha1(data.encode()).hexdigest()
+def random_noise() -> str:
+    """Generate random noise (12 bytes base64 encoded)."""
+    return base64.b64encode(bytes(random.randint(0, 255) for _ in range(12))).decode()
 
 
-def rc4_decrypt(key: str, data: str) -> str:
-    """RC4 decrypt data with key (pure Python implementation)."""
-    key_bytes = key.encode() if isinstance(key, str) else key
-    data_bytes = b64decode(data) if isinstance(data, str) else data
-
-    return _rc4_crypt(key_bytes, data_bytes).decode('utf-8')
-
-
-def rc4_encrypt(key: str, data: str) -> str:
-    """RC4 encrypt data with key (pure Python implementation)."""
-    key_bytes = key.encode() if isinstance(key, str) else key
-    data_bytes = data.encode() if isinstance(data, str) else data
-
-    encrypted = _rc4_crypt(key_bytes, data_bytes)
-    return b64encode(encrypted).decode('utf-8')
-
-
-def _rc4_crypt(key: bytes, data: bytes) -> bytes:
-    """RC4 cipher implementation."""
-    # Initialize RC4 state
+def rc4_encrypt(key: bytes, data: bytes) -> bytes:
+    """RC4 encrypt data with key."""
     S = list(range(256))
     j = 0
-
-    # Key scheduling algorithm (KSA)
     for i in range(256):
         j = (j + S[i] + key[i % len(key)]) % 256
         S[i], S[j] = S[j], S[i]
-
-    # Pseudo-random generation algorithm (PRGA)
     i = j = 0
     result = bytearray(len(data))
-
     for k in range(len(data)):
         i = (i + 1) % 256
         j = (j + S[i]) % 256
         S[i], S[j] = S[j], S[i]
         result[k] = data[k] ^ S[(S[i] + S[j]) % 256]
-
     return bytes(result)
+
+
+def sha1_base64(data: str) -> bytes:
+    """Calculate SHA1 hash."""
+    return hashlib.sha1(data.encode()).digest()
+
+
+def rc4_hash(method: str, uri: str, data: dict, ssecurity: str) -> str:
+    """Calculate RC4 hash for MIoT request signature."""
+    array_list = [method.upper(), uri]
+    for k, v in data.items():
+        array_list.append(f"{k}={v}")
+    array_list.append(ssecurity)
+    sb = "&".join(array_list)
+    return base64.b64encode(sha1_base64(sb)).decode()
+
+
+def encode_miot(method: str, uri: str, data: Any, ssecurity: str) -> dict:
+    """Encode MIoT request data."""
+    nonce = random_noise()
+    snonce = sign_nonce(ssecurity, nonce)
+    key = base64.b64decode(snonce)
+    rc4_encrypt(key, bytes(1024))
+    json_data = json.dumps(data, separators=(",", ":"))
+    map_data = {"data": json_data}
+    map_data["rc4_hash__"] = rc4_hash(method, uri, {"data": json_data}, snonce)
+    for k, v in map_data.items():
+        if isinstance(v, str):
+            map_data[k] = base64.b64encode(rc4_encrypt(key, v.encode())).decode()
+    map_data["signature"] = rc4_hash(method, uri, map_data, snonce)
+    map_data["_nonce"] = nonce
+    map_data["ssecurity"] = ssecurity
+    return map_data
 
 
 class MiOTService:
     """MiOT service for Xiaomi device control."""
 
-    API_BASE = "https://api.iot.mi.com"
-    GATEWAY_BASE = "https://gateway.iot.mi.com"
+    API_BASE = "https://api.io.mi.com/app"
+    MINA_API = "https://api2.mina.mi.com"
 
     # Device IDs for Xiao AI speakers
     DEVICE_IDS = {
-        "speaker": "7",  # Xiao AI speaker
-        "speaker_pro": "5",  # Xiao AI speaker Pro
-        "speaker_screen": "6",  # Xiao AI speaker with screen
-        "speaker_art": "0",  # Xiao AI speaker Art
+        "speaker": "7",
+        "speaker_pro": "5",
+        "speaker_screen": "6",
+        "speaker_art": "0",
     }
 
     def __init__(
         self,
-        user_id: str,
-        pass_token: str,
-        device_name: str,
+        user_id: str | None = None,
+        pass_token: str | None = None,
+        device_name: str | None = None,
+        config_path: str | None = None,
         timeout: float = 30.0,
     ):
         """Initialize MiOT service.
 
         Args:
-            user_id: Xiaomi user ID
-            pass_token: Xiaomi account password or passToken
-            device_name: Device name as shown in Mi Home app
+            user_id: Xiaomi user ID (optional if using config_path)
+            pass_token: Xiaomi passToken or password (optional if using config_path)
+            device_name: Device name (optional if using config_path)
+            config_path: Path to .mi.json file (from migpt-next)
             timeout: HTTP request timeout in seconds
         """
         self.user_id = user_id
@@ -108,238 +129,193 @@ class MiOTService:
         self._client = httpx.AsyncClient(
             timeout=timeout,
             headers={
-                "User-Agent": "MiHome/6.0.210 (android;6.0.1)  appVersion:6.0.210",
+                "User-Agent": "MICO/AndroidApp/@SHIP.TO.2A2FE0D7@/2.4.40",
                 "Content-Type": "application/x-www-form-urlencoded",
             },
         )
 
         self._service_token: str | None = None
-        self._pass_token: str | None = None
-        self._device_id: str | None = None
+        self._ssecurity: str | None = None
+        self._c_user_id: str | None = None
+        self._device_id_str: str | None = None
         self._device_info: dict[str, Any] | None = None
+        self._did: str | None = None
 
-    async def login(self) -> bool:
-        """Login to Xiaomi account and get service token.
+        # Load from config file if provided
+        if config_path:
+            self._load_from_config(config_path)
 
-        Returns:
-            True if login successful, False otherwise
-        """
+    def _load_from_config(self, config_path: str) -> bool:
+        """Load authentication from .mi.json config file."""
         try:
-            # Step 1: Get session and nonce
-            login_url = f"{self.API_BASE}/v2/user/login"
-            nonce = self._generate_nonce()
-
-            # If pass_token is already a token (not password), use it directly
-            if len(self.pass_token) > 32:
-                self._pass_token = self.pass_token
-                # Try to get service token directly
-                return await self._refresh_service_token()
-
-            # Otherwise, treat as password and do full login
-            password_hash = md5(self.pass_token)
-            signed_nonce = sha1(nonce + password_hash)
-
-            # Encrypt credentials
-            encrypted = rc4_encrypt(
-                signed_nonce,
-                json.dumps({"username": self.user_id, "password": password_hash})
-            )
-
-            payload = {
-                "encrypted": encrypted,
-                "nonce": nonce,
-                "signature": sha1(nonce + password_hash + "-----"),
-            }
-
-            response = await self._client.post(login_url, data=payload)
-            result = response.json()
-
-            if result.get("code") != 0:
-                logger.error("MiOT login failed: {}", result.get("message"))
+            path = Path(config_path)
+            if not path.exists():
+                logger.error("Config file not found: {}", config_path)
                 return False
 
-            data = result.get("data", {})
-            self._pass_token = data.get("passToken")
-            self._service_token = data.get("serviceToken")
-            self._device_id = str(data.get("userId", ""))
+            with open(path) as f:
+                data = json.load(f)
 
-            logger.info("MiOT login successful for user: {}", self._device_id)
+            # Try to load from 'mina' or 'miot' key
+            account = data.get("mina") or data.get("miot")
+            if not account:
+                logger.error("No 'mina' or 'miot' key in config file")
+                return False
+
+            # Extract authentication info
+            self._service_token = account.get("serviceToken")
+            self.user_id = account.get("userId")
+            self._device_id_str = account.get("deviceId")
+            self._did = account.get("did")
+
+            # Get pass info
+            pass_info = account.get("pass", {})
+            self._ssecurity = pass_info.get("ssecurity")
+            self._c_user_id = pass_info.get("cUserId")
+
+            # Get device info
+            device = account.get("device", {})
+            if device:
+                self._device_info = {
+                    "did": device.get("miotDID") or account.get("did"),
+                    "name": device.get("name"),
+                    "alias": device.get("alias"),
+                    "deviceId": device.get("deviceId"),
+                    "deviceID": device.get("deviceID"),
+                    "serialNumber": device.get("serialNumber"),
+                    "hardware": device.get("hardware"),
+                    "deviceSNProfile": device.get("deviceSNProfile"),
+                }
+
+            logger.info("Loaded config from: {}", config_path)
+            logger.info("  userId: {}", self.user_id)
+            logger.info("  did: {}", self._did)
+            logger.info("  device: {}", self._device_info.get("name") if self._device_info else "None")
+
             return True
 
         except Exception as e:
-            logger.error("MiOT login error: {}", e)
+            logger.error("Failed to load config: {}", e)
             return False
 
-    async def _refresh_service_token(self) -> bool:
-        """Refresh service token.
+    async def login(self) -> bool:
+        """Login to Xiaomi account."""
+        if self._service_token and self._ssecurity:
+            logger.info("Using existing authentication from config")
+            return True
 
-        Returns:
-            True if refresh successful
-        """
-        if not self._pass_token:
+        if self.user_id and self.pass_token:
+            logger.error("Password login not implemented. Use migpt-next to get .mi.json config")
             return False
+
+        logger.error("No authentication available")
+        return False
+
+    def _build_mina_cookies(self) -> str:
+        """Build cookies for MiNA API."""
+        cookies = {
+            "userId": self.user_id or "",
+            "serviceToken": self._service_token or "",
+        }
+        if self._device_info:
+            cookies["sn"] = self._device_info.get("serialNumber", "")
+            cookies["hardware"] = self._device_info.get("hardware", "")
+            cookies["deviceId"] = self._device_info.get("deviceId", "")
+            cookies["deviceSNProfile"] = self._device_info.get("deviceSNProfile", "")
+        return "; ".join(f"{k}={v}" for k, v in cookies.items())
+
+    def _build_miot_cookies(self) -> str:
+        """Build cookies for MIoT API."""
+        cookies = {
+            "countryCode": "CN",
+            "locale": "zh_CN",
+            "timezone": "GMT+08:00",
+            "timezone_id": "Asia/Shanghai",
+            "userId": self.user_id or "",
+            "cUserId": self._c_user_id or "",
+            "PassportDeviceId": self._device_id_str or "",
+            "serviceToken": self._service_token or "",
+            "yetAnotherServiceToken": self._service_token or "",
+        }
+        return "; ".join(f"{k}={v}" for k, v in cookies.items())
+
+    async def get_device_list(self) -> list[dict[str, Any]] | None:
+        """Get list of devices for the account."""
+        if not self._service_token or not self._ssecurity:
+            if not await self.login():
+                return None
 
         try:
-            url = f"{self.API_BASE}/v2/user/refreshServiceToken"
-            nonce = self._generate_nonce()
+            url = f"{self.API_BASE}/home/device_list"
+            payload = {"getVirtualModel": False, "getHuamiDevices": 0}
+            signed_payload = encode_miot("POST", "/home/device_list", payload, self._ssecurity)
 
-            payload = {
-                "serviceToken": self._service_token or "",
-                "passToken": self._pass_token,
-                "nonce": nonce,
+            headers = {
+                "User-Agent": "MICO/AndroidApp/@SHIP.TO.2A2FE0D7@/2.4.40",
+                "x-xiaomi-protocal-flag-cli": "PROTOCAL-HTTP2",
+                "miot-accept-encoding": "GZIP",
+                "miot-encrypt-algorithm": "ENCRYPT-RC4",
+                "Cookie": self._build_miot_cookies(),
             }
 
-            response = await self._client.post(url, data=payload)
-            result = response.json()
+            response = await self._client.post(url, data=signed_payload, headers=headers)
+            logger.debug("Device list response: {} - {}", response.status_code, response.text[:200])
 
-            if result.get("code") == 0:
-                self._service_token = result.get("data", {}).get("serviceToken")
-                return True
-
-            # Token invalid, need full login
-            return False
-
-        except Exception as e:
-            logger.error("MiOT token refresh error: {}", e)
-            return False
-
-    async def get_device_list(self) -> list[dict[str, Any]]:
-        """Get list of devices for the account.
-
-        Returns:
-            List of device information dictionaries
-        """
-        if not self._service_token:
-            logger.error("MiOT not logged in")
             return []
-
-        try:
-            url = f"{self.API_BASE}/v2/device/list"
-            nonce = self._generate_nonce()
-
-            payload = {
-                "pageSize": 200,
-                "nonce": nonce,
-            }
-
-            signed_payload = self._sign_payload(payload, url)
-
-            response = await self._client.post(
-                url,
-                data=signed_payload,
-                headers={"Authorization": f"Bearer {self._service_token}"},
-            )
-            result = response.json()
-
-            if result.get("code") != 0:
-                logger.error("MiOT get device list failed: {}", result.get("message"))
-                return []
-
-            return result.get("data", {}).get("list", [])
 
         except Exception as e:
             logger.error("MiOT get device list error: {}", e)
-            return []
+            return None
 
     async def find_device(self) -> dict[str, Any] | None:
-        """Find device by name.
-
-        Returns:
-            Device info dictionary or None if not found
-        """
-        devices = await self.get_device_list()
-
-        # Try to find by name or alias
-        for device in devices:
-            if device.get("name") == self.device_name:
-                self._device_info = device
-                return device
-            if device.get("aliasName") == self.device_name:
-                self._device_info = device
-                return device
-
-        # Try to find by device type (Xiao AI speaker)
-        for device in devices:
-            if device.get("deviceType") in [
-                self.DEVICE_IDS["speaker"],
-                self.DEVICE_IDS["speaker_pro"],
-                self.DEVICE_IDS["speaker_screen"],
-                self.DEVICE_IDS["speaker_art"],
-            ]:
-                if device.get("name", "").lower().replace(" ", "").find(
-                    self.device_name.lower().replace(" ", "")
-                ) >= 0:
-                    self._device_info = device
-                    return device
-
-        logger.error("MiOT device not found: {}", self.device_name)
-        return None
-
-    async def get_device_id(self) -> str | None:
-        """Get device ID (did) for the configured device.
-
-        Returns:
-            Device ID string or None if device not found
-        """
+        """Find device by name or use configured device."""
         if self._device_info:
-            return self._device_info.get("did")
-
-        device = await self.find_device()
-        if device:
-            return device.get("did")
-
+            return self._device_info
         return None
 
     async def play_tts(self, text: str) -> bool:
-        """Play TTS on the device.
-
-        Args:
-            text: Text to speak
-
-        Returns:
-            True if successful
-        """
+        """Play TTS on the device using MiNA API."""
         if not self._service_token:
-            logger.error("MiOT not logged in")
-            return False
+            if not await self.login():
+                return False
 
         if not self._device_info:
-            await self.find_device()
-
-        if not self._device_info:
-            logger.error("MiOT device not found")
-            return False
-
-        device_id = self._device_info.get("did")
-        if not device_id:
-            logger.error("MiOT device ID not found")
+            logger.error("No device configured")
             return False
 
         try:
-            url = f"{self.API_BASE}/v2/device/tts"
-            nonce = self._generate_nonce()
+            url = f"{self.MINA_API}/remote/ubus"
 
+            # Build request like migpt-next
             payload = {
-                "did": device_id,
-                "text": text,
-                "nonce": nonce,
+                "deviceId": self._device_info.get("deviceId"),
+                "path": "mediaplayer",
+                "method": "tts_play",
+                "message": json.dumps({"text": text}),
+                "requestId": str(uuid.uuid4()),
+                "timestamp": int(self._device_info.get("timestamp", 0) or 0) or int(__import__("time").time()),
             }
 
-            signed_payload = self._sign_payload(payload, url)
+            headers = {
+                "User-Agent": "MICO/AndroidApp/@SHIP.TO.2A2FE0D7@/2.4.40",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Cookie": self._build_mina_cookies(),
+            }
 
-            response = await self._client.post(
-                url,
-                data=signed_payload,
-                headers={"Authorization": f"Bearer {self._service_token}"},
-            )
-            result = response.json()
+            response = await self._client.post(url, data=payload, headers=headers)
 
-            if result.get("code") != 0:
-                logger.error("MiOT TTS failed: {}", result.get("message"))
+            if response.status_code == 200:
+                result = response.json()
+                logger.info("TTS sent: {}", result)
+                # Check device response
+                if result.get("code") == 0:
+                    return True
+                else:
+                    logger.warning("TTS device response: {}", result.get("message"))
+                    return False
+            else:
+                logger.error("TTS failed: {} - {}", response.status_code, response.text)
                 return False
-
-            logger.debug("MiOT TTS played: {}", text[:50])
-            return True
 
         except Exception as e:
             logger.error("MiOT TTS error: {}", e)
@@ -347,151 +323,47 @@ class MiOTService:
 
     async def do_action(
         self,
-        action: str,
-        params: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
-        """Execute action on the device.
-
-        Args:
-            action: Action name (e.g., "tts_play")
-            params: Action parameters
-
-        Returns:
-            Result dictionary or None if failed
-        """
-        if not self._service_token:
-            logger.error("MiOT not logged in")
-            return None
-
+        siid: int,
+        aiid: int,
+        args: list | dict | None = None,
+    ) -> bool:
+        """Execute action on the device using MIoT API."""
         if not self._device_info:
             await self.find_device()
 
         if not self._device_info:
-            logger.error("MiOT device not found")
-            return None
-
-        device_id = self._device_info.get("did")
-        if not device_id:
-            logger.error("MiOT device ID not found")
-            return None
+            return False
 
         try:
-            url = f"{self.API_BASE}/v2/device/action"
-            nonce = self._generate_nonce()
+            url = f"{self.API_BASE}/miotspecs/action"
+            did = self._device_info.get("did") or self._did
 
             payload = {
-                "did": device_id,
-                "action": action,
-                "params": json.dumps(params or {}),
-                "nonce": nonce,
+                "did": did,
+                "siid": siid,
+                "aiid": aiid,
+                "in": args if isinstance(args, list) else [args] if args else [],
             }
 
-            signed_payload = self._sign_payload(payload, url)
+            signed_payload = encode_miot("POST", "/miotspecs/action", payload, self._ssecurity)
 
-            response = await self._client.post(
-                url,
-                data=signed_payload,
-                headers={"Authorization": f"Bearer {self._service_token}"},
-            )
-            result = response.json()
+            headers = {
+                "User-Agent": "MICO/AndroidApp/@SHIP.TO.2A2FE0D7@/2.4.40",
+                "x-xiaomi-protocal-flag-cli": "PROTOCAL-HTTP2",
+                "Cookie": self._build_miot_cookies(),
+            }
 
-            if result.get("code") != 0:
-                logger.error("MiOT action failed: {}", result.get("message"))
-                return None
+            response = await self._client.post(url, data=signed_payload, headers=headers)
 
-            return result.get("data")
+            if response.status_code == 200:
+                return True
+            else:
+                logger.error("MIoT action failed: {} - {}", response.status_code, response.text)
+                return False
 
         except Exception as e:
             logger.error("MiOT action error: {}", e)
-            return None
-
-    async def get_property(
-        self,
-        prop: str,
-    ) -> dict[str, Any] | None:
-        """Get device property.
-
-        Args:
-            prop: Property name
-
-        Returns:
-            Property value or None if failed
-        """
-        if not self._service_token:
-            logger.error("MiOT not logged in")
-            return None
-
-        if not self._device_info:
-            await self.find_device()
-
-        if not self._device_info:
-            logger.error("MiOT device not found")
-            return None
-
-        device_id = self._device_info.get("did")
-        if not device_id:
-            logger.error("MiOT device ID not found")
-            return None
-
-        try:
-            url = f"{self.API_BASE}/v2/device/property"
-            nonce = self._generate_nonce()
-
-            payload = {
-                "did": device_id,
-                "props": prop,
-                "nonce": nonce,
-            }
-
-            signed_payload = self._sign_payload(payload, url)
-
-            response = await self._client.post(
-                url,
-                data=signed_payload,
-                headers={"Authorization": f"Bearer {self._service_token}"},
-            )
-            result = response.json()
-
-            if result.get("code") != 0:
-                logger.error("MiOT get property failed: {}", result.get("message"))
-                return None
-
-            return result.get("data")
-
-        except Exception as e:
-            logger.error("MiOT get property error: {}", e)
-            return None
-
-    def _generate_nonce(self) -> str:
-        """Generate a random nonce for API requests."""
-        return md5(str(time.time()) + str(random.random()))[:16]
-
-    def _sign_payload(self, payload: dict[str, Any], url: str) -> dict[str, Any]:
-        """Sign the API request payload.
-
-        Args:
-            payload: Request payload
-            url: Request URL
-
-        Returns:
-            Signed payload with signature
-        """
-        # Sort keys and create string
-        sorted_payload = sorted(payload.items())
-        payload_str = "&".join(f"{k}={v}" for k, v in sorted_payload)
-
-        # Create signature
-        signature = hmac.new(
-            self._pass_token.encode(),
-            payload_str.encode(),
-            hashlib.sha256
-        ).hexdigest()
-
-        # Add signature to payload
-        signed = dict(payload)
-        signed["signature"] = signature
-
-        return signed
+            return False
 
     async def close(self) -> None:
         """Close the HTTP client."""
@@ -500,12 +372,7 @@ class MiOTService:
     @property
     def is_logged_in(self) -> bool:
         """Check if logged in."""
-        return self._service_token is not None
-
-    @property
-    def device_id(self) -> str | None:
-        """Get current device ID."""
-        return self._device_id
+        return self._service_token is not None and self._ssecurity is not None
 
     @property
     def device_info(self) -> dict[str, Any] | None:

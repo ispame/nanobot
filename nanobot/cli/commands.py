@@ -197,78 +197,118 @@ def onboard():
 
 @app.command()
 def miot_devices(
-    user_id: str = typer.Option(..., "--user-id", "-u", help="Xiaomi user ID"),
-    pass_token: str = typer.Option(..., "--pass-token", "-p", help="Xiaomi passToken or password"),
-    device_name: str | None = typer.Option(None, "--device-name", "-d", help="Device name to find (optional)"),
+    config_path: str = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to .mi.json config file (from migpt-next)",
+    ),
+    user_id: str = typer.Option(
+        None,
+        "--user-id",
+        "-u",
+        help="Xiaomi user ID (optional if using --config)",
+    ),
+    pass_token: str = typer.Option(
+        None,
+        "--pass-token",
+        "-p",
+        help="Xiaomi passToken or password (optional if using --config)",
+    ),
+    device_name: str = typer.Option(
+        None,
+        "--device-name",
+        "-d",
+        help="Device name to find (optional)",
+    ),
 ):
-    """List Xiaomi devices and test MiOT authentication."""
+    """List Xiaomi devices and test MiOT authentication.
+
+    Examples:
+        nanobot miot-devices -c /path/to/.mi.json
+        nanobot miot-devices -c .mi.json -d "小爱音箱"
+    """
     from nanobot.services.miot import MiOTService
 
     async def run():
-        service = MiOTService(
-            user_id=user_id,
-            pass_token=pass_token,
-            device_name=device_name or "",
-        )
+        # Check if using config file
+        if config_path:
+            service = MiOTService(
+                config_path=config_path,
+                device_name=device_name or "",
+            )
+        elif user_id:
+            service = MiOTService(
+                user_id=user_id,
+                pass_token=pass_token or "",
+                device_name=device_name or "",
+            )
+        else:
+            console.print("[red]Error: Either --config or --user-id is required[/red]")
+            return
 
-        console.print("\n[bold]1. Logging in...[/bold]")
+        console.print("\n[bold]1. Checking authentication...[/bold]")
         login_result = await service.login()
 
         if not login_result:
-            console.print("[red]✗ Login failed![/red]")
+            console.print("[red]✗ Authentication failed![/red]")
+            console.print("   Tip: Use migpt-next to generate .mi.json: npx migpt-next account")
             await service.close()
             return
 
-        console.print("[green]✓ Login successful![/green]")
+        console.print("[green]✓ Authentication successful![/green]")
 
-        console.print("\n[bold]2. Fetching device list...[/bold]")
-        devices = await service.get_device_list()
+        # Show device info
+        if service.device_info:
+            console.print(f"\n[bold]Device:[/bold] {service.device_info.get('name')}")
+            console.print(f"[bold]DID:[/bold] {service.device_info.get('did')}")
 
-        if not devices:
-            console.print("[yellow]No devices found![/yellow]")
-            await service.close()
-            return
+        # Test device status
+        console.print("\n[bold]2. Checking device status...[/bold]")
+        import httpx
 
-        console.print(f"[green]✓ Found {len(devices)} devices:[/green]\n")
+        url = "https://api2.mina.mi.com/remote/ubus"
+        payload = {
+            "deviceId": service._device_info.get("deviceId") if service._device_info else "",
+            "path": "mediaplayer",
+            "method": "player_get_play_status",
+            "message": "{}",
+            "requestId": "test",
+            "timestamp": 0,
+        }
 
-        # Show device table
-        table = Table(show_header=True, header_style="bold magenta")
-        table.add_column("Name")
-        table.add_column("DID")
-        table.add_column("Type")
-        table.add_column("Model")
+        headers = {
+            "User-Agent": "MICO/AndroidApp/@SHIP.TO.2A2FE0D7@/2.4.40",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Cookie": service._build_mina_cookies(),
+        }
 
-        for device in devices:
-            table.add_row(
-                device.get("name", ""),
-                device.get("did", ""),
-                device.get("deviceType", ""),
-                device.get("model", ""),
-            )
-
-        console.print(table)
-
-        # If device_name specified, try to find it
-        if device_name:
-            console.print(f"\n[bold]3. Looking for device: {device_name}[/bold]")
-            device = await service.find_device()
-
-            if device:
-                console.print(f"[green]✓ Found: {device.get('name')} (did: {device.get('did')})[/green]")
-
-                # Test TTS
-                console.print("\n[bold]4. Testing TTS...[/bold]")
-                tts_result = await service.play_tts("测试语音播放")
-
-                if tts_result:
-                    console.print("[green]✓ TTS test successful![/green]")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, data=payload, headers=headers, timeout=30)
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("code") == 0:
+                    data = json.loads(result.get("data", {}).get("info", "{}"))
+                    console.print(f"[green]✓ Device online - Volume: {data.get('volume')}, Status: {data.get('status')}[/green]")
                 else:
-                    console.print("[red]✗ TTS test failed![/red]")
+                    console.print(f"[yellow]Device response: {result.get('message')}[/yellow]")
             else:
-                console.print(f"[red]✗ Device '{device_name}' not found![/red]")
+                console.print(f"[red]✗ Status check failed: {response.status_code}[/red]")
+
+        # Test TTS if device found
+        if service.device_info:
+            console.print("\n[bold]3. Testing TTS...[/bold]")
+            tts_result = await service.play_tts("测试语音播放")
+
+            if tts_result:
+                console.print("[green]✓ TTS test successful![/green]")
+            else:
+                console.print("[yellow]⚠ TTS test failed (device returned error)[/yellow]")
+                console.print("   This might be a device-specific issue")
 
         await service.close()
 
+    import json
     asyncio.run(run())
 
 
