@@ -388,6 +388,159 @@ class MiOTService:
             logger.error("MiOT action error: {}", e)
             return False
 
+    async def get_voice_memos(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Get voice memos/recordings from the device.
+
+        Args:
+            limit: Maximum number of memos to retrieve.
+
+        Returns:
+            List of voice memo dicts with 'id', 'text', 'audio_url', 'timestamp'.
+        """
+        if not self._service_token:
+            if not await self.login():
+                return []
+
+        if not self._device_info:
+            await self.find_device()
+
+        if not self._device_info:
+            logger.error("No device configured for voice memos")
+            return []
+
+        try:
+            # Use MiNA API to get voice memos
+            # This endpoint provides recent voice interactions
+            url = f"{self.MINA_API}/v2/voice/memos"
+
+            payload = {
+                "deviceId": self._device_info.get("deviceId"),
+                "limit": limit,
+            }
+
+            headers = {
+                "User-Agent": "MICO/AndroidApp/@SHIP.TO.2A2FE0D7@/2.4.40",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Cookie": self._build_mina_cookies(),
+            }
+
+            response = await self._client.post(url, data=payload, headers=headers)
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("code") == 0:
+                    memos = result.get("data", {}).get("memos", [])
+                    logger.debug("Got {} voice memos", len(memos))
+                    return memos
+                else:
+                    logger.warning("Voice memos API returned code: {}", result.get("code"))
+
+            logger.debug("Voice memos request: {} - {}", response.status_code, response.text[:200])
+            return []
+
+        except Exception as e:
+            logger.error("MiOT get voice memos error: {}", e)
+            return []
+
+    async def get_conversation_history(self, limit: int = 10, timestamp: int | None = None) -> list[dict[str, Any]]:
+        """Get conversation history from the device.
+
+        Args:
+            limit: Maximum number of conversations to retrieve.
+            timestamp: Optional timestamp to get conversations before this time.
+
+        Returns:
+            List of conversation dicts with 'id', 'query', 'answer', 'timestamp', 'time'.
+        """
+        if not self._service_token:
+            if not await self.login():
+                return []
+
+        if not self._device_info:
+            await self.find_device()
+
+        if not self._device_info:
+            logger.error("No device configured for conversation history")
+            return []
+
+        try:
+            # Use userprofile.mina.mi.com API to get conversation history
+            # Based on migpt-next implementation
+            url = "https://userprofile.mina.mi.com/device_profile/v2/conversation"
+
+            params = {
+                "limit": limit,
+                "timestamp": timestamp or int(time.time() * 1000),
+                "requestId": str(uuid.uuid4()),
+                "source": "dialogu",
+                "hardware": self._device_info.get("hardware", ""),
+            }
+
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Linux; Android 10; 000; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/119.0.6045.193 Mobile Safari/537.36 /XiaoMi/HybridView/ micoSoundboxApp/i appVersion/A_2_4.40",
+                "Referer": "https://userprofile.mina.mi.com/dialogue-note/index.html",
+            }
+
+            cookies = {
+                "userId": self.user_id or "",
+                "serviceToken": self._service_token or "",
+                "deviceId": self._device_info.get("deviceId", ""),
+            }
+
+            response = await self._client.get(
+                url,
+                params=params,
+                headers=headers,
+                cookies=cookies,
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                logger.debug("Conversation response: {}", result)
+                if result.get("code") == 0:
+                    data = result.get("data")
+                    # Data is a JSON string, need to parse it
+                    if isinstance(data, str):
+                        import json as json_mod
+                        data = json_mod.loads(data)
+
+                    records = data.get("records", []) if isinstance(data, dict) else []
+                    logger.debug("Got {} conversation records", len(records))
+
+                    # Transform to simpler format
+                    conversations = []
+                    for record in records:
+                        query_data = record.get("query", {})
+                        query_text = query_data.get("text", "") if isinstance(query_data, dict) else str(query_data)
+
+                        # Get answer text
+                        answers = record.get("answers", [])
+                        answer_text = ""
+                        if answers:
+                            first_answer = answers[0]
+                            if first_answer.get("type") == "TTS":
+                                answer_text = first_answer.get("tts", {}).get("text", "") or ""
+                            elif first_answer.get("type") == "LLM":
+                                answer_text = first_answer.get("llm", {}).get("text", "") or ""
+
+                        conversations.append({
+                            "id": str(record.get("time", "")),
+                            "query": query_text,
+                            "answer": answer_text,
+                            "timestamp": record.get("time"),
+                            "time": record.get("time"),
+                        })
+                    return conversations
+                else:
+                    logger.warning("Conversation history API returned code: {}", result.get("code"))
+
+            logger.debug("Conversation history request: {} - {}", response.status_code, response.text[:200])
+            return []
+
+        except Exception as e:
+            logger.error("MiOT get conversation history error: {}", e)
+            return []
+
     async def close(self) -> None:
         """Close the HTTP client."""
         await self._client.aclose()

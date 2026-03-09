@@ -210,26 +210,130 @@ class XiaomiChannel(BaseChannel):
 
     async def _check_voice_input(self) -> None:
         """Check for new voice input and process if available."""
-        # Note: The actual implementation depends on how we get voice data
-        # This is a placeholder that checks the device status
-        # In practice, we'd need to:
-        # 1. Use voice备忘 API or custom skill to trigger recording
-        # 2. Get the recorded audio file
-        # 3. Transcribe and process
-
         if not self._miot:
             return
 
-        # TODO: Implement actual voice input detection
-        # This typically requires:
-        # 1. Setting up a custom voice command that triggers HTTP callback
-        # 2. Or polling the device's voice memo API
-        # 3. Or using the MiOT voice recording functionality
-
         logger.trace("Xiaomi: Checking for voice input...")
 
+        # Get conversation history from the device
+        conversations = await self._miot.get_conversation_history(limit=10)
+
+        if not conversations:
+            return
+
+        # Get the latest conversation (first one, as API returns newest first)
+        latest_conv = conversations[0]
+        conv_id = latest_conv.get("id") or str(latest_conv.get("time", ""))
+
+        # Skip if already processed
+        if conv_id == self._last_voice_id:
+            return
+
+        # Update last processed ID
+        self._last_voice_id = conv_id
+
+        # Get the user's query text
+        query_text = latest_conv.get("query", "")
+        if not query_text:
+            return
+
+        # Check if this is a nanobot trigger (must START with keyword)
+        if not self._is_nanobot_trigger(query_text):
+            logger.debug("Xiaomi: Skipping non-trigger query: {}", query_text[:50])
+            return
+
+        # Remove trigger keyword from the actual query
+        actual_query = self._remove_trigger_keyword(query_text)
+
+        logger.info("Xiaomi: Processing trigger query: {}", actual_query)
+
+        # Get audio URL if available
+        audio_url = latest_conv.get("audioUrl") or latest_conv.get("audio_url")
+
+        # Process the voice input
+        await self._process_voice_input_from_text(
+            text=actual_query,
+            audio_url=audio_url,
+            conv_id=conv_id,
+        )
+
+    def _is_nanobot_trigger(self, text: str) -> bool:
+        """Check if text starts with any trigger keyword."""
+        if not text:
+            return False
+        # Must START with trigger keyword (not just contain it)
+        return any(text.startswith(keyword) for keyword in self.config.trigger_keywords)
+
+    def _remove_trigger_keyword(self, text: str) -> str:
+        """Remove trigger keyword from text."""
+        for keyword in self.config.trigger_keywords:
+            if keyword in text:
+                # Remove the keyword and clean up extra spaces/punctuation
+                result = text.replace(keyword, "").strip()
+                # Remove common leading patterns like "帮我" or "问一下"
+                leading_patterns = ["帮我", "问一下", "请", "帮"]
+                for pattern in leading_patterns:
+                    if result.startswith(pattern):
+                        result = result[len(pattern):].strip()
+                return result
+        return text
+
+    async def _process_voice_input_from_text(
+        self,
+        text: str,
+        audio_url: str | None = None,
+        conv_id: str | None = None,
+    ) -> None:
+        """Process voice input from text query or transcribe audio.
+
+        Args:
+            text: The text query (already transcribed from device).
+            audio_url: Optional audio URL for re-transcription if needed.
+            conv_id: Conversation ID for tracking.
+        """
+        try:
+            # Use the text directly if available (from device transcription)
+            if text:
+                logger.info("Xiaomi: Processing query: {}", text)
+
+                # Send to message bus
+                await self._handle_message(
+                    sender_id="default",
+                    chat_id="default",
+                    content=text,
+                    metadata={
+                        "source": "xiaomi_voice",
+                        "conversation_id": conv_id,
+                        "audio_url": audio_url,
+                    },
+                )
+            elif audio_url and self._transcriber:
+                # Fallback: transcribe from audio URL
+                logger.info("Xiaomi: Transcribing from audio URL: {}", audio_url)
+                transcription = await self._transcriber.transcribe(audio_url)
+                if not transcription:
+                    logger.warning("Xiaomi: Empty transcription from audio")
+                    return
+
+                logger.info("Xiaomi: Transcribed: {}", transcription)
+
+                await self._handle_message(
+                    sender_id="default",
+                    chat_id="default",
+                    content=transcription,
+                    metadata={
+                        "source": "xiaomi_voice",
+                        "conversation_id": conv_id,
+                    },
+                )
+            else:
+                logger.warning("Xiaomi: No text or audio available for processing")
+
+        except Exception as e:
+            logger.error("Xiaomi: Voice processing error: {}", e)
+
     async def _process_voice_input(self, audio_path: str) -> None:
-        """Process voice input: transcribe and send to message bus."""
+        """Process voice input: transcribe and send to message bus (legacy method)."""
         if not self._transcriber:
             logger.warning("Xiaomi: No transcription provider configured")
             return

@@ -181,6 +181,7 @@ class XiaomiConfig(Base):
     simple_response_length_threshold: int = 100  # Max length for TTS response
     allow_from: list[str] = Field(default_factory=list)  # Allowed user IDs (currently only supports single user "default")
     poll_interval_seconds: int = 2  # How often to check for new voice input
+    trigger_keywords: list[str] = Field(default_factory=lambda: ["让小茹箩"])  # Keywords that trigger nanobot (e.g. "让小茹箩")
 
 
 class WebChannelConfig(Base):

@@ -701,8 +701,7 @@ nanobot gateway
 
 **1. 准备工作**
 
-- 安装依赖：`pip install python-miio`
-- 获取设备 Token（详见接入指南）
+- 使用 migpt-next 获取 `.mi.json` 鉴权文件（详见接入指南）
 
 **2. 配置**
 
@@ -711,8 +710,9 @@ nanobot gateway
   "channels": {
     "xiaomi": {
       "enabled": true,
-      "ip": "192.168.1.100",
-      "token": "your_32_char_token",
+      "miotConfigPath": "/path/to/.mi.json",
+      "deviceName": "小爱音箱",
+      "triggerKeywords": ["让小茹箩"],
       "feishuReplyEnabled": true,
       "allowFrom": ["default"]
     }
