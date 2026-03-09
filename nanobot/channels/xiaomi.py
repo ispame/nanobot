@@ -68,21 +68,30 @@ class XiaomiChannel(BaseChannel):
             logger.error("MiOT service not available. Please ensure httpx is installed.")
             return
 
-        if not self.config.user_id or not self.config.pass_token:
-            logger.error("Xiaomi: userId and passToken not configured")
-            return
-
-        if not self.config.device_name:
-            logger.error("Xiaomi: deviceName not configured")
-            return
+        # Check config - either miot_config_path or user_id+pass_token
+        if not self.config.miot_config_path:
+            if not self.config.user_id or not self.config.pass_token:
+                logger.error("Xiaomi: Please configure miotConfigPath or userId+passToken")
+                return
+            if not self.config.device_name:
+                logger.error("Xiaomi: deviceName not configured")
+                return
 
         # Initialize MiOT service
         try:
-            self._miot = MiOTService(
-                user_id=self.config.user_id,
-                pass_token=self.config.pass_token,
-                device_name=self.config.device_name,
-            )
+            if self.config.miot_config_path:
+                # Use .mi.json config file
+                self._miot = MiOTService(
+                    config_path=self.config.miot_config_path,
+                    device_name=self.config.device_name,
+                )
+            else:
+                # Use user_id + pass_token
+                self._miot = MiOTService(
+                    user_id=self.config.user_id,
+                    pass_token=self.config.pass_token,
+                    device_name=self.config.device_name,
+                )
 
             # Login to Xiaomi account
             login_success = await self._miot.login()

@@ -175,7 +175,8 @@ class XiaomiConfig(Base):
     enabled: bool = False
     user_id: str = ""  # Xiaomi user ID (userId)
     pass_token: str = ""  # Xiaomi account password or passToken
-    device_name: str = ""  # Device name (did) - exact name as shown in Mi Home app
+    device_name: str = ""  # Device name - exact name as shown in Mi Home app
+    miot_config_path: str = ""  # Path to .mi.json config file (from migpt-next)
     feishu_reply_enabled: bool = True  # Send complex responses via Feishu
     simple_response_length_threshold: int = 100  # Max length for TTS response
     allow_from: list[str] = Field(default_factory=list)  # Allowed user IDs (currently only supports single user "default")
