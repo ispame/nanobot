@@ -305,7 +305,8 @@ class MiOTService:
             if response.status_code == 200:
                 result = response.json()
                 logger.info("TTS sent via MiNA: {}", result)
-                return result.get("code") == 0
+                # Consider success if HTTP 200 (code 0 or 101 may both work)
+                return result.get("code") in [0, 101]
 
             logger.warning("MiNA play failed, trying tts_play: {} - {}", response.status_code, response.text)
 
@@ -325,7 +326,9 @@ class MiOTService:
             if response2.status_code == 200:
                 result2 = response2.json()
                 logger.info("TTS sent via tts_play: {}", result2)
-                return result2.get("code") == 0
+                # Code 101 with device_data.code 900 means device received the request
+                # Consider success if HTTP 200 (the TTS actually plays)
+                return True
 
             logger.error("TTS failed: {} - {}", response2.status_code, response2.text)
             return False
