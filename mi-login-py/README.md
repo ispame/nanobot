@@ -4,7 +4,7 @@
 
 ## 功能特性
 
-- **语音输入**：通过"让小茹箩"触发词唤醒 nanobot，其他语音由小爱正常处理
+- **语音输入**：通过"机器猫"触发词唤醒 nanobot，其他语音由小爱正常处理
 - **TTS 语音回复**：简单问题直接通过小爱音响语音播放
 - **飞书复杂响应**：复杂内容（长文本、代码、表格）自动转发到飞书发送卡片
 - **自动 Token 刷新**：无需手动管理 `.mi.json`，配置环境变量即可自动登录和刷新
@@ -22,7 +22,7 @@
 cp nanobot/.env.example nanobot/.env
 
 # 编辑配置，填入你的小米账号信息
-# XIAOMI_USER_ID: 小米数字 ID
+# XIAOMI_USER_ID: 小米数字 ID 
 # XIAOMI_PASSWORD: 密码
 # XIAOMI_DID: 设备 ID（可选）
 ```
@@ -44,8 +44,9 @@ XIAOMI_DID=你的设备ID
     "xiaomi": {
       "enabled": true,
       "deviceName": "小爱音箱",
-      "triggerKeywords": ["让小茹箩"],
+      "triggerKeywords": ["机器猫"],
       "feishuReplyEnabled": true,
+      "feishuChatId": "ou_89b63e563bcc889c46d54d6ad0e7XXXX",    
       "allowFrom": ["default"]
     }
   }
@@ -68,11 +69,12 @@ nanobot gateway
 
 ### 方式二：手动配置 .mi.json
 
-如果你已有 `.mi.json` 文件（通过 migpt-next 生成），可以直接使用：
+
 
 ```bash
-# 1. 复制 .mi.json 到项目根目录
-cp /path/to/.mi.json .
+# 1. 复制 .mi.json 到项目根目录, 输入你的数字用户名（不是手机号），密码，和设备did, 可以没有
+# 是你登录https://account.xiaomi.com/ 的密码 + 进去之后的小米ID，是一串数字
+python mi-login-py/login.py -u uid33333333 -p passwordxxx -d did000000 
 
 # 2. 配置 nanobot
 ```
@@ -82,11 +84,11 @@ cp /path/to/.mi.json .
   "channels": {
     "xiaomi": {
       "enabled": true,
-      "miotConfigPath": "/path/to/.mi.json",
+      "miotConfigPath": "/path/to/.mi.json",  # 输入你的.mi.json的路径，通常在你的nanobot的目录下
       "deviceName": "小爱音箱",
-      "triggerKeywords": ["让小茹箩"],
+      "triggerKeywords": ["机器猫"],
       "feishuReplyEnabled": true,
-      "allowFrom": ["default"]
+      "allowFrom": ["*"]
     }
   }
 }
@@ -101,7 +103,7 @@ cp /path/to/.mi.json .
 | `enabled` | `false` | 是否启用小爱频道 |
 | `miotConfigPath` | - | `.mi.json` 文件路径（使用环境变量登录时可选）|
 | `deviceName` | - | 设备名称（与米家 APP 中一致）|
-| `triggerKeywords` | `["让小茹箩"]` | 触发 nanobot 的关键词 |
+| `triggerKeywords` | `["机器猫"]` | 触发 nanobot 的关键词 |
 | `feishuReplyEnabled` | `true` | 复杂内容是否转发飞书 |
 | `simpleResponseLengthThreshold` | `100` | TTS 语音回复的字数阈值 |
 | `allowFrom` | `[]` | 允许的用户 ID |
@@ -114,9 +116,9 @@ cp /path/to/.mi.json .
 对小爱音响说：**"让小茹箩 + 你的问题"**
 
 例如：
-- "让小茹箩告诉我今天有什么任务"
-- "让小茹箩查一下明天天气"
-- "让小茹箩帮我记一下今天下午三点开会"
+- "机器猫告诉我今天有什么任务"
+- "机器猫查一下明天天气"
+- "机器猫帮我记一下今天下午三点开会"
 
 ### 响应路由规则
 

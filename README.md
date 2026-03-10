@@ -20,6 +20,7 @@
 
 ## 📢 News
 
+- **2026-03-10** 🔌 Added **Xiaomi Xiao AI Speaker** support — voice input via conversation polling, auto token refresh via environment variables. See [接入指南](./mi-login-py/README.md) for details.
 - **2026-03-07** 🌐 Added **Web Channel** — integrated web chat UI directly into nanobot gateway. Now you can chat with nanobot via browser at `http://localhost:1105/chat`! (If you only need the standalone web chat, see [web_chat/README.md](./web_chat/README.md) for details.)
 - **2026-02-28** 🚀 Released **v0.1.4.post3** — cleaner context, hardened session history, and smarter agent. Please see [release notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.4.post3) for details.
 - **2026-02-27** 🧠 Experimental thinking mode support, DingTalk media messages, Feishu and QQ channel fixes.
