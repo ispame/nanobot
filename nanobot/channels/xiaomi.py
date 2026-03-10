@@ -182,11 +182,20 @@ class XiaomiChannel(BaseChannel):
             logger.debug("Xiaomi: Feishu reply disabled, skipping")
             return
 
+        # Get Feishu chat_id: first try metadata, then fall back to configured fixed ID
+        feishu_chat_id = msg.metadata.get("feishu_chat_id", "") or self.config.feishu_chat_id
+        if not feishu_chat_id:
+            logger.warning(
+                "Xiaomi: No feishu_chat_id configured, cannot forward to Feishu. "
+                "Set xiaomi.feishu_chat_id in config to enable Feishu replies."
+            )
+            return
+
         # Create new OutboundMessage for Feishu
         # Use metadata to pass through original sender info
         feishu_msg = OutboundMessage(
             channel="feishu",
-            chat_id=msg.metadata.get("feishu_chat_id", ""),
+            chat_id=feishu_chat_id,
             content=msg.content,
             media=msg.media,
             metadata=msg.metadata,

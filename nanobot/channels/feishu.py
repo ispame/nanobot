@@ -274,12 +274,14 @@ class FeishuChannel(BaseChannel):
             .log_level(lark.LogLevel.INFO) \
             .build()
 
-        # Create event handler (only register message receive, ignore other events)
+        # Create event handler (register message receive and other needed events)
         event_handler = lark.EventDispatcherHandler.builder(
             self.config.encrypt_key or "",
             self.config.verification_token or "",
         ).register_p2_im_message_receive_v1(
             self._on_message_sync
+        ).register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(
+            self._on_bot_p2p_chat_entered
         ).build()
 
         # Create WebSocket client for long connection
@@ -669,6 +671,13 @@ class FeishuChannel(BaseChannel):
 
         except Exception as e:
             logger.error("Error sending Feishu message: {}", e)
+
+    def _on_bot_p2p_chat_entered(self, data) -> None:
+        """
+        Handler for bot_p2p_chat_entered event.
+        This event is triggered when a user first starts a private chat with the bot.
+        """
+        logger.debug("Feishu: bot_p2p_chat_entered event received")
 
     def _on_message_sync(self, data: "P2ImMessageReceiveV1") -> None:
         """

@@ -20,3 +20,8 @@ poetry.lock
 .pytest_cache/
 botpy.log
 
+
+# Xiaomi credentials
+.mi.json
+.mi.json_back
+mi-login/

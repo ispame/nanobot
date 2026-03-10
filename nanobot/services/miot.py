@@ -11,6 +11,7 @@ import base64
 import gzip
 import hashlib
 import json
+import os
 import random
 import time
 import uuid
@@ -18,6 +19,15 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+
+# Import from mi-login-py for auto-refresh
+import sys
+from pathlib import Path as PathLib
+_milogin_path = PathLib(__file__).parent.parent.parent / "mi-login-py"
+if _milogin_path.exists() and str(_milogin_path) not in sys.path:
+    sys.path.insert(0, str(_milogin_path))
+
+from xiaomi_auth import XiaomiAuth
 
 from loguru import logger
 
@@ -124,8 +134,15 @@ class MiOTService:
         """
         self.user_id = user_id
         self.pass_token = pass_token
+        self.pass_token_value: str | None = None  # The actual passToken for refreshing
         self.device_name = device_name
         self.timeout = timeout
+        self.config_path = config_path
+
+        # Store env credentials for re-authentication
+        self._env_user_id: str | None = None
+        self._env_password: str | None = None
+        self._env_did: str | None = None
 
         self._client = httpx.AsyncClient(
             timeout=timeout,
@@ -145,6 +162,15 @@ class MiOTService:
         # Load from config file if provided
         if config_path:
             self._load_from_config(config_path)
+        else:
+            # Try default path
+            default_path = Path(__file__).parent.parent.parent / ".mi.json"
+            if default_path.exists():
+                self._load_from_config(str(default_path))
+
+        # Try to load from environment variables if not authenticated
+        if not self._service_token or not self._ssecurity:
+            self._load_env_credentials()
 
     def _load_from_config(self, config_path: str) -> bool:
         """Load authentication from .mi.json config file."""
@@ -173,6 +199,7 @@ class MiOTService:
             pass_info = account.get("pass", {})
             self._ssecurity = pass_info.get("ssecurity")
             self._c_user_id = pass_info.get("cUserId")
+            self.pass_token_value = pass_info.get("passToken")
 
             # Get device info
             device = account.get("device", {})
@@ -199,6 +226,144 @@ class MiOTService:
             logger.error("Failed to load config: {}", e)
             return False
 
+    def _load_env_credentials(self) -> bool:
+        """Load credentials from environment variables and attempt login.
+
+        Returns:
+            True if login successful, False otherwise
+        """
+        env_creds = XiaomiAuth.from_env()
+        if not env_creds:
+            logger.debug("No credentials found in environment variables")
+            return False
+
+        self._env_user_id = env_creds.get("user_id")
+        self._env_password = env_creds.get("password")
+        self._env_did = env_creds.get("did")
+
+        logger.info("Found credentials in environment, attempting auto-login...")
+
+        # Run synchronous login in a new thread since it's sync
+        import asyncio
+
+        async def do_login():
+            return await self.reauthenticate()
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If already in async context, schedule the login
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(asyncio.run, do_login())
+                    return future.result()
+            else:
+                return loop.run_until_complete(do_login())
+        except RuntimeError:
+            # No event loop, create new one
+            return asyncio.run(do_login())
+
+    async def reauthenticate(self) -> bool:
+        """Re-authenticate using environment variable credentials.
+
+        Returns:
+            True if login successful, False otherwise
+        """
+        if not self._env_user_id or not self._env_password:
+            logger.warning("Cannot re-authenticate: missing environment credentials")
+            return False
+
+        try:
+            logger.info("Re-authenticating with Xiaomi account...")
+
+            # Use XiaomiAuth to login
+            auth = XiaomiAuth()
+            account = auth.login(
+                user_id=self._env_user_id,
+                password=self._env_password,
+                did=self._env_did,
+            )
+
+            if not account:
+                logger.error("Re-authentication failed")
+                return False
+
+            # Update service state
+            self._service_token = account.get("serviceToken")
+            self.user_id = account.get("userId")
+            self._device_id_str = account.get("deviceId")
+            self._did = account.get("did")
+
+            # Get pass info
+            pass_info = account.get("pass", {})
+            self._ssecurity = pass_info.get("ssecurity")
+            self._c_user_id = pass_info.get("cUserId")
+            self.pass_token_value = pass_info.get("passToken")
+
+            # Get device info
+            device = account.get("device", {})
+            if device:
+                self._device_info = {
+                    "did": device.get("miotDID") or self._did,
+                    "name": device.get("name"),
+                    "alias": device.get("alias"),
+                    "deviceId": device.get("deviceId"),
+                    "deviceID": device.get("deviceID"),
+                    "serialNumber": device.get("serialNumber"),
+                    "hardware": device.get("hardware"),
+                    "deviceSNProfile": device.get("deviceSNProfile"),
+                }
+
+            logger.info("Re-authentication successful!")
+            logger.info("  userId: {}", self.user_id)
+            logger.info("  did: {}", self._did)
+
+            # Save credentials to .mi.json
+            self._save_credentials()
+
+            return True
+
+        except Exception as e:
+            logger.error("Re-authentication error: {}", e)
+            return False
+
+    def _save_credentials(self) -> bool:
+        """Save current credentials to .mi.json file.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # Determine save path
+        save_path = self.config_path
+        if not save_path:
+            save_path = str(Path(__file__).parent.parent.parent / ".mi.json")
+
+        try:
+            # Build account dict
+            account = {
+                "deviceId": self._device_id_str,
+                "did": self._did,
+                "userId": self.user_id,
+                "sid": "micoapi",
+                "pass": {
+                    "ssecurity": self._ssecurity,
+                    "cUserId": self._c_user_id,
+                    "passToken": self.pass_token_value,
+                },
+                "serviceToken": self._service_token,
+            }
+
+            if self._device_info:
+                account["device"] = self._device_info
+
+            # Save using XiaomiAuth
+            from xiaomi_auth import save_credentials
+            return save_credentials(account, save_path)
+
+        except Exception as e:
+            logger.error("Failed to save credentials: {}", e)
+            return False
+
     async def login(self) -> bool:
         """Login to Xiaomi account."""
         if self._service_token and self._ssecurity:
@@ -211,6 +376,98 @@ class MiOTService:
 
         logger.error("No authentication available")
         return False
+
+    async def refresh_token(self) -> bool:
+        """Refresh the service token using passToken.
+
+        If token refresh fails (e.g., token expired), will attempt full re-authentication
+        using environment variable credentials.
+        """
+        if not self.pass_token_value or not self._ssecurity:
+            logger.warning("Cannot refresh token: missing passToken or ssecurity")
+            # Try full re-authentication
+            return await self.reauthenticate()
+
+        try:
+            # Step 1: Get serviceLogin to obtain nonce and sign
+            login_url = "https://account.xiaomi.com/pass/serviceLogin"
+            params = {
+                "sid": "micoapi",
+                "_json": True,
+                "_locale": "zh_CN",
+            }
+            cookies = {
+                "userId": self.user_id,
+                "deviceId": self._device_id_str,
+                "passToken": self.pass_token_value,
+            }
+
+            response = await self._client.get(login_url, params=params, cookies=cookies)
+            if response.status_code != 200:
+                logger.warning("Failed to get login page for token refresh: {}", response.status_code)
+                # Try full re-authentication
+                return await self.reauthenticate()
+
+            result = response.json()
+            if result.get("code") != 0:
+                # Need to re-authenticate with password
+                logger.warning("Token refresh requires re-authentication, attempting full re-login...")
+                return await self.reauthenticate()
+
+            # Step 2: Get service token
+            service_token = await self._get_service_token(result)
+            if service_token:
+                self._service_token = service_token
+                logger.info("Successfully refreshed service token")
+                # Save updated credentials
+                self._save_credentials()
+                return True
+
+            return False
+
+        except Exception as e:
+            logger.error("Failed to refresh token: {}", e)
+            return False
+
+    async def _get_service_token(self, pass_info: dict) -> str | None:
+        """Get service token from pass info."""
+        try:
+            location = pass_info.get("location")
+            nonce = pass_info.get("nonce")
+            ssecurity = pass_info.get("ssecurity")
+
+            if not location or not nonce or not ssecurity:
+                return None
+
+            import hashlib
+            import hmac
+
+            # Calculate clientSign
+            message = f"nonce={nonce}&{ssecurity}"
+            client_sign = hashlib.sha1(message.encode()).hexdigest()
+
+            params = {
+                "_userIdNeedEncrypt": True,
+                "clientSign": client_sign,
+            }
+
+            response = await self._client.get(
+                location,
+                params=params,
+                headers={"User-Agent": "MICO/AndroidApp/2.4.40"},
+            )
+
+            # Extract serviceToken from cookies
+            cookies = response.headers.get("set-cookie", "")
+            for cookie in cookies.split(","):
+                if "serviceToken" in cookie:
+                    return cookie.split("=")[1].split(";")[0]
+
+            return None
+
+        except Exception as e:
+            logger.error("Failed to get service token: {}", e)
+            return None
 
     def _build_mina_cookies(self) -> str:
         """Build cookies for MiNA API."""
@@ -531,6 +788,57 @@ class MiOTService:
                     return conversations
                 else:
                     logger.warning("Conversation history API returned code: {}", result.get("code"))
+
+            # Log non-200 responses (including 401)
+            logger.warning(
+                "Conversation history API returned status {}: {}",
+                response.status_code,
+                response.text[:200] if response.text else "empty"
+            )
+
+            # Try to refresh token on 401 and retry once
+            if response.status_code == 401:
+                logger.info("Attempting to refresh service token...")
+                if await self.refresh_token():
+                    logger.info("Token refreshed, retrying conversation history request...")
+                    # Retry the request with new token
+                    cookies["serviceToken"] = self._service_token
+                    response = await self._client.get(
+                        url,
+                        params=params,
+                        headers=headers,
+                        cookies=cookies,
+                    )
+                    if response.status_code == 200:
+                        result = response.json()
+                        if result.get("code") == 0:
+                            data = result.get("data")
+                            if isinstance(data, str):
+                                import json as json_mod
+                                data = json_mod.loads(data)
+                            records = data.get("records", []) if isinstance(data, dict) else []
+                            conversations = []
+                            for record in records:
+                                query_data = record.get("query", {})
+                                query_text = query_data.get("text", "") if isinstance(query_data, dict) else str(query_data)
+                                answers = record.get("answers", [])
+                                answer_text = ""
+                                if answers:
+                                    first_answer = answers[0]
+                                    if first_answer.get("type") == "TTS":
+                                        answer_text = first_answer.get("tts", {}).get("text", "") or ""
+                                    elif first_answer.get("type") == "LLM":
+                                        answer_text = first_answer.get("llm", {}).get("text", "") or ""
+                                conversations.append({
+                                    "id": str(record.get("time", "")),
+                                    "query": query_text,
+                                    "answer": answer_text,
+                                    "timestamp": record.get("time"),
+                                    "time": record.get("time"),
+                                })
+                            return conversations
+                else:
+                    logger.warning("Token refresh failed")
 
             return []
 

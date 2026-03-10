@@ -178,6 +178,7 @@ class XiaomiConfig(Base):
     device_name: str = ""  # Device name - exact name as shown in Mi Home app
     miot_config_path: str = ""  # Path to .mi.json config file (from migpt-next)
     feishu_reply_enabled: bool = True  # Send complex responses via Feishu
+    feishu_chat_id: str = ""  # Fixed Feishu chat_id/open_id to send replies to (if set, overrides metadata)
     simple_response_length_threshold: int = 100  # Max length for TTS response
     allow_from: list[str] = Field(default_factory=list)  # Allowed user IDs (currently only supports single user "default")
     poll_interval_seconds: int = 2  # How often to check for new voice input
