@@ -179,7 +179,7 @@ Connect nanobot to your favorite chat platform.
 | **Email** | IMAP/SMTP credentials |
 | **QQ** | App ID + App Secret |
 | **Web** | Built-in web interface |
-| **小爱音响** | IP + Token ([获取指南](./nanobot/channels/xiaomi.md)) |
+| **小爱音响** | 环境变量自动登录 ([接入指南](./mi-login-py/README.md)) |
 
 <details>
 <summary><b>Telegram</b> (Recommended)</summary>
@@ -697,7 +697,7 @@ nanobot gateway
 
 通过小爱音响进行语音对话，简单问题直接语音回复，复杂内容转发飞书。
 
-详细接入指南请查看：[小爱音响接入指南](./nanobot/channels/xiaomi.md)
+详细接入指南请查看：[小爱音响接入指南](./mi-login-py/README.md)
 
 **1. 准备工作**
 

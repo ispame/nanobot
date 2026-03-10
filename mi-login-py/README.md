@@ -1,4 +1,4 @@
-# 小爱音响接入指南
+# Xiaomi 小爱音响接入指南
 
 将小爱音响接入 nanobot，实现语音对话和智能响应。
 
@@ -7,38 +7,75 @@
 - **语音输入**：通过"让小茹箩"触发词唤醒 nanobot，其他语音由小爱正常处理
 - **TTS 语音回复**：简单问题直接通过小爱音响语音播放
 - **飞书复杂响应**：复杂内容（长文本、代码、表格）自动转发到飞书发送卡片
+- **自动 Token 刷新**：无需手动管理 `.mi.json`，配置环境变量即可自动登录和刷新
 
-## 接入方式
+## 快速开始
 
-### 步骤 1：获取鉴权文件
+### 方式一：使用环境变量自动登录（推荐）
 
-使用 migpt-next 工具获取 `.mi.json` 配置文件：
+#### 步骤 1：配置环境变量
 
-```bash
-# 1. 克隆 migpt-next
-git clone https://github.com/idootop/migpt-next.git
-cd migpt-next
-
-# 2. 安装依赖
-npm install
-
-# 3. 运行登录命令
-npx migpt-next account
-```
-
-这会在当前目录生成 `.mi.json` 文件，包含完整的鉴权信息。
-
-### 步骤 2：测试连接
+在项目根目录创建 `.env` 文件（不提交到版本控制）：
 
 ```bash
-nanobot miot-devices -c /path/to/.mi.json -d "小爱音箱"
+# 复制示例配置
+cp nanobot/.env.example nanobot/.env
+
+# 编辑配置，填入你的小米账号信息
+# XIAOMI_USER_ID: 小米数字 ID
+# XIAOMI_PASSWORD: 密码
+# XIAOMI_DID: 设备 ID（可选）
 ```
 
-如果能看到设备在线，说明连接成功。
+`.env` 文件内容：
+```bash
+XIAOMI_USER_ID=你的小米数字ID
+XIAOMI_PASSWORD=你的密码
+XIAOMI_DID=你的设备ID
+```
 
-### 步骤 3：配置 nanobot
+#### 步骤 2：配置 nanobot
 
 在 `~/.nanobot/config.json` 中添加：
+
+```json
+{
+  "channels": {
+    "xiaomi": {
+      "enabled": true,
+      "deviceName": "小爱音箱",
+      "triggerKeywords": ["让小茹箩"],
+      "feishuReplyEnabled": true,
+      "allowFrom": ["default"]
+    }
+  }
+}
+```
+
+#### 步骤 3：运行
+
+```bash
+nanobot gateway
+```
+
+启动时 nanobot 会：
+1. 读取 `.env` 中的凭据
+2. 自动登录获取 `serviceToken`
+3. 生成 `.mi.json` 文件
+4. Token 过期时自动重新登录
+
+---
+
+### 方式二：手动配置 .mi.json
+
+如果你已有 `.mi.json` 文件（通过 migpt-next 生成），可以直接使用：
+
+```bash
+# 1. 复制 .mi.json 到项目根目录
+cp /path/to/.mi.json .
+
+# 2. 配置 nanobot
+```
 
 ```json
 {
@@ -49,28 +86,22 @@ nanobot miot-devices -c /path/to/.mi.json -d "小爱音箱"
       "deviceName": "小爱音箱",
       "triggerKeywords": ["让小茹箩"],
       "feishuReplyEnabled": true,
-      "simpleResponseLengthThreshold": 100,
-      "allowFrom": ["default"],
-      "pollIntervalSeconds": 2
+      "allowFrom": ["default"]
     }
   }
 }
 ```
 
-### 步骤 4：运行
-
-```bash
-nanobot gateway
-```
+---
 
 ## 配置说明
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `enabled` | `false` | 是否启用小爱频道 |
-| `miotConfigPath` | - | `.mi.json` 文件路径（必填）|
+| `miotConfigPath` | - | `.mi.json` 文件路径（使用环境变量登录时可选）|
 | `deviceName` | - | 设备名称（与米家 APP 中一致）|
-| `triggerKeywords` | `["让小茹箩"]` | 触发 nanobot 的关键词（必须以关键词开头）|
+| `triggerKeywords` | `["让小茹箩"]` | 触发 nanobot 的关键词 |
 | `feishuReplyEnabled` | `true` | 复杂内容是否转发飞书 |
 | `simpleResponseLengthThreshold` | `100` | TTS 语音回复的字数阈值 |
 | `allowFrom` | `[]` | 允许的用户 ID |
@@ -119,11 +150,44 @@ AgentLoop处理...
 TTS回复 / 飞书卡片
 ```
 
+## 技术原理
+
+### 自动登录流程
+
+```
+1. MiOTService.__init__()
+   ↓
+2. 检查 .mi.json 是否存在
+   ↓
+3. 如果不存在或 Token 过期：
+   ├─ 读取 XIAOMI_USER_ID, XIAOMI_PASSWORD 从环境变量
+   ├─ 调用 XiaomiAuth.login() 获取新令牌
+   └─ 保存到 .mi.json
+```
+
+### Token 刷新流程 (401 无感刷新)
+
+```
+1. API 请求返回 401
+   ↓
+2. 调用 MiOTService.refresh_token()
+   ↓
+3. 如果 passToken 刷新失败：
+   ├─ 从环境变量读取密码
+   ├─ 调用 XiaomiAuth.login() 重新登录
+   ├─ 更新内存中的 serviceToken
+   └─ 写回 .mi.json 持久化
+   ↓
+4. 重试请求
+```
+
 ## 常见问题
 
-### 1. 找不到 .mi.json 文件
+### 1. 环境变量登录失败
 
-运行 `npx migpt-next account` 后，会在当前目录生成 `.mi.json` 文件。
+- 确认 `.env` 文件在正确位置（项目根目录）
+- 确认 `XIAOMI_USER_ID` 是数字 ID，不是手机号
+- 首次登录可能需要安全验证，按终端提示操作
 
 ### 2. 设备不在线
 
@@ -138,7 +202,7 @@ TTS回复 / 飞书卡片
 
 ### 4. 语音输入无响应
 
-- 检查是否正确配置了 `.mi.json` 路径
+- 检查是否正确配置了 `.mi.json` 路径或环境变量
 - 确认 `deviceName` 正确
 - 检查日志中是否有错误信息
 - 确保触发词以正确方式说出（以"让小茹箩"开头）
@@ -147,3 +211,4 @@ TTS回复 / 飞书卡片
 
 - [MiGPT 项目](https://github.com/idootop/migpt-next)
 - [mi-service-lite](https://github.com/idootop/mi-service-lite)
+- [nanobot README](../README.md)
