@@ -36,17 +36,24 @@ class ClaudeCodeProcess:
 
     async def start(self, resume: str | None = None) -> str:
         """Start the Claude Code process and return the session ID."""
+        logger.info(f"Starting Claude Code process with resume={resume}, session_id={self.session_id}, cwd={self.cwd}")
         args = [
             self.config.claude_path,
+            "-p",  # Non-interactive print mode
             "--output-format", "stream-json",
+            "--input-format", "stream-json",
             "--verbose",
         ]
 
-        if resume:
+        # Only use --resume if it's a valid UUID format
+        import re
+        uuid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
+        if resume and uuid_pattern.match(resume):
             args.extend(["--resume", resume])
-        elif self.session_id:
+        elif self.session_id and uuid_pattern.match(self.session_id):
             args.extend(["--resume", self.session_id])
 
+        # Only add model if explicitly configured (don't override user's default)
         if self.config.default_model:
             args.extend(["--model", self.config.default_model])
 
@@ -73,11 +80,18 @@ class ClaudeCodeProcess:
             }
             args.extend(["--mcp-config", json.dumps(mcp_config)])
 
-        logger.debug(f"Starting Claude Code: {' '.join(args)}")
+        logger.info(f"Starting Claude Code: {' '.join(args)}")
 
-        # Set up environment
+        # Set up environment - unset CLAUDECODE to avoid nested session error
         env = os.environ.copy()
         env["CLAUDE_CODE_ENTRYPOINT"] = "sdk-python"
+        # Remove CLAUDECODE env var to allow subprocess to start its own session
+        if "CLAUDECODE" in env:
+            del env["CLAUDECODE"]
+        if "CLAUDE_CODE" in env:
+            del env["CLAUDE_CODE"]
+
+        logger.info(f"Environment after cleanup: CLAUDECODE={'(not set)' if 'CLAUDECODE' not in env else env.get('CLAUDECODE')}")
 
         self._process = await asyncio.create_subprocess_exec(
             *args,
@@ -90,18 +104,62 @@ class ClaudeCodeProcess:
 
         self._stdin = self._process.stdin
         self._stdout = self._process.stdout
+        self._stderr = self._process.stderr
 
         # Start reading messages
         self._read_task = asyncio.create_task(self._read_messages())
 
-        # Wait for initialization to get session ID
+        # Also read stderr for debugging
+        if self._stderr:
+            asyncio.create_task(self._read_stderr())
+
+        # Wait for initialization to get session ID (with timeout)
+        logger.info("Waiting for Claude Code initialization...")
         session_id = None
-        async for msg in self._stream_messages():
-            if msg.get("type") == "system" and msg.get("subtype") == "init":
-                session_id = msg.get("session_id")
-                break
+        try:
+            # Wait for init message with timeout
+            init_task = asyncio.create_task(self._wait_for_init())
+            try:
+                session_id = await asyncio.wait_for(init_task, timeout=30.0)
+                logger.info(f"Claude Code initialized with session: {session_id}")
+            except asyncio.TimeoutError:
+                logger.error("Claude Code initialization timed out after 30 seconds")
+        except Exception as e:
+            logger.error(f"Error during Claude Code initialization: {e}")
+
+        # Check if process is still running after init
+        if self._process:
+            logger.info(f"After initialization: returncode={self._process.returncode}")
+            if self._process.returncode is not None:
+                logger.error(f"Claude Code process exited during initialization with code {self._process.returncode}")
 
         return session_id or self.session_id or str(uuid.uuid4())
+
+    async def _wait_for_init(self) -> str | None:
+        """Wait for initialization message from Claude Code."""
+        async for msg in self._stream_messages():
+            msg_type = msg.get("type")
+            subtype = msg.get("subtype")
+            logger.info(f"Received message: {msg_type}, subtype: {subtype}")
+            if msg_type == "system" and subtype == "init":
+                return msg.get("session_id")
+            # Log error messages for debugging
+            if msg_type == "result" and subtype == "error_during_execution":
+                logger.error(f"Claude Code error: {msg.get('message', msg)}")
+        return None
+
+    async def _read_stderr(self):
+        """Read stderr from Claude Code process."""
+        if not self._stderr:
+            return
+        try:
+            while True:
+                line = await self._stderr.readline()
+                if not line:
+                    break
+                logger.info(f"Claude Code stderr: {line.decode('utf-8').strip()}")
+        except Exception as e:
+            logger.error(f"Error reading stderr: {e}")
 
     async def _read_messages(self):
         """Continuously read messages from Claude Code stdout."""
@@ -140,6 +198,14 @@ class ClaudeCodeProcess:
         if not self._stdin:
             raise RuntimeError("Process not started")
 
+        # Check if process is still running before sending
+        if self._process and self._process.returncode is not None:
+            raise RuntimeError(f"Process already exited with code {self._process.returncode}")
+
+        logger.info(f"ClaudeCodeProcess.send_message: stdin={self._stdin}, subprocess={self._process}")
+        if self._process:
+            logger.info(f"ClaudeCodeProcess._process: returncode={self._process.returncode}")
+
         # Send user message
         message = {
             "type": "user",
@@ -149,7 +215,9 @@ class ClaudeCodeProcess:
             },
         }
         self._stdin.write((json.dumps(message) + "\n").encode("utf-8"))
+        logger.info("Draining stdin...")
         await self._stdin.drain()
+        logger.info("Drain complete, streaming responses...")
 
         # Stream responses
         async for msg in self._stream_messages():
@@ -203,12 +271,16 @@ class ClaudeCodeProcess:
                 pass
 
         if self._process:
-            self._process.terminate()
             try:
-                await asyncio.wait_for(self._process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                self._process.kill()
-                await self._process.wait()
+                self._process.terminate()
+                try:
+                    await asyncio.wait_for(self._process.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    self._process.kill()
+                    await self._process.wait()
+            except ProcessLookupError:
+                # Process already exited
+                logger.debug("Process already exited, skipping terminate")
 
 
 class ClaudeClient:

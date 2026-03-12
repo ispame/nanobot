@@ -289,6 +289,10 @@ class FeishuChannel(BaseChannel):
             self.config.verification_token or "",
         ).register_p2_im_message_receive_v1(
             self._on_message_sync
+        ).register_p2_im_message_message_read_v1(
+            self._on_message_read
+        ).register_p2_im_message_reaction_created_v1(
+            self._on_message_reaction_created
         ).register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(
             self._on_bot_p2p_chat_entered
         ).build()
@@ -688,6 +692,20 @@ class FeishuChannel(BaseChannel):
         """
         logger.debug("Feishu: bot_p2p_chat_entered event received")
 
+    def _on_message_read(self, data) -> None:
+        """
+        Handler for message_read event.
+        This event is triggered when a user reads a message.
+        """
+        logger.debug("Feishu: message_read event received")
+
+    def _on_message_reaction_created(self, data) -> None:
+        """
+        Handler for message_reaction_created event.
+        This event is triggered when a user adds a reaction to a message.
+        """
+        logger.debug("Feishu: message_reaction_created event received")
+
     def _on_message_sync(self, data: "P2ImMessageReceiveV1") -> None:
         """
         Sync handler for incoming messages (called from WebSocket thread).
@@ -775,6 +793,7 @@ class FeishuChannel(BaseChannel):
             reply_to = chat_id if chat_type == "group" else sender_id
 
             # Check if Claude Code handler should handle this message
+            logger.info(f"Claude handler present: {self.claude_handler is not None}")
             if self.claude_handler:
                 # Handle via Claude Code
                 async def progress_callback(text: str):
@@ -787,13 +806,27 @@ class FeishuChannel(BaseChannel):
                         metadata={"_progress": True},
                     ))
 
-                await self.claude_handler.handle_message(
+                handled = await self.claude_handler.handle_message(
                     sender_id=sender_id,
                     content=content,
                     channel=self.name,
                     chat_id=reply_to,
                     on_progress=progress_callback,
                 )
+                # If Claude Code is disabled (returned False), fall back to normal agent flow
+                if not handled:
+                    logger.info("Claude Code disabled, falling back to normal agent flow")
+                    await self._handle_message(
+                        sender_id=sender_id,
+                        chat_id=reply_to,
+                        content=content,
+                        media=media_paths,
+                        metadata={
+                            "message_id": message_id,
+                            "chat_type": chat_type,
+                            "msg_type": msg_type,
+                        }
+                    )
             else:
                 # Forward to message bus (normal agent flow)
                 await self._handle_message(

@@ -50,8 +50,19 @@ class ClaudeSession:
 
     @property
     def is_active(self) -> bool:
-        """Check if session is active."""
-        return self._process is not None
+        """Check if session is active (process is running)."""
+        if self._process is None:
+            logger.debug(f"Session {self.session_id}: is_active=False (no process)")
+            return False
+        # self._process is ClaudeCodeProcess, check its _process attribute
+        proc = getattr(self._process, '_process', None)
+        if proc is None:
+            logger.debug(f"Session {self.session_id}: is_active=False (no subprocess)")
+            return False
+        if proc.returncode is not None:
+            logger.info(f"Session {self.session_id}: is_active=False (process exited with code {proc.returncode})")
+            return False
+        return True
 
     def add_message(self, role: str, content: str, metadata: dict | None = None) -> None:
         """Add a message to the session history."""
@@ -120,9 +131,12 @@ class SessionStore:
     def save(self, session: ClaudeSession) -> None:
         """Save session to disk."""
         file_path = self._get_session_file(session.user_id, session.session_id)
-        with open(file_path, "w") as f:
-            json.dump(session.to_dict(), f, indent=2)
-        logger.debug(f"Saved session {session.session_id} to {file_path}")
+        try:
+            with open(file_path, "w") as f:
+                json.dump(session.to_dict(), f, indent=2)
+            logger.debug(f"Saved session {session.session_id} to {file_path}")
+        except Exception as e:
+            logger.error(f"Failed to save session {session.session_id}: {e}")
 
     def load(self, user_id: str, session_id: str) -> ClaudeSession | None:
         """Load session from disk."""

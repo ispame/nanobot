@@ -227,10 +227,10 @@ class ClaudeCodeConfig(Base):
     claude_path: str = "claude"  # Claude CLI path
     config_dir: str = "~/.claude"  # Claude config directory
     permission_mode: str = "auto"  # auto, bypass, or ask
-    default_model: str = "claude-sonnet-4-6-20250514"
+    default_model: str = ""  # Empty = use Claude Code's default model
     allowed_tools: list[str] = Field(default_factory=list)  # Allowed tool list (empty = all)
     disallowed_tools: list[str] = Field(default_factory=list)  # Disallowed tool list
-    mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+    mcp_servers: dict[str, "MCPServerConfig"] = Field(default_factory=dict)
     max_sessions_per_user: int = 10  # Max sessions per user
     session_dir: str = "~/.nanobot/sessions"  # Session storage directory
 
