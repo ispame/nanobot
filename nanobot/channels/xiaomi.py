@@ -182,6 +182,14 @@ class XiaomiChannel(BaseChannel):
             logger.debug("Xiaomi: Feishu reply disabled, skipping")
             return
 
+        # Play Feishu fallback prompt on the speaker before sending to Feishu
+        if self.config.feishu_fallback_prompt and self._miot:
+            try:
+                await self._miot.play_tts(self.config.feishu_fallback_prompt)
+                logger.debug("Xiaomi: Played Feishu fallback prompt")
+            except Exception as e:
+                logger.warning("Xiaomi: Failed to play Feishu fallback prompt: {}", e)
+
         # Get Feishu chat_id: first try metadata, then fall back to configured fixed ID
         feishu_chat_id = msg.metadata.get("feishu_chat_id", "") or self.config.feishu_chat_id
         if not feishu_chat_id:
@@ -250,6 +258,14 @@ class XiaomiChannel(BaseChannel):
         if not self._is_nanobot_trigger(query_text):
             logger.debug("Xiaomi: Skipping non-trigger query: {}", query_text[:50])
             return
+
+        # Try to interrupt/stop Xiaoice's current playback if enabled
+        if self.config.enable_interrupt and self._miot:
+            try:
+                await self._miot.stop_playback()
+                logger.debug("Xiaomi: Sent stop playback command to interrupt Xiaoice")
+            except Exception as e:
+                logger.warning("Xiaomi: Failed to stop playback: {}", e)
 
         # Remove trigger keyword from the actual query
         actual_query = self._remove_trigger_keyword(query_text)

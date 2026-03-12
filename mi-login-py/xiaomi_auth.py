@@ -91,7 +91,7 @@ class XiaomiAuth:
         except json.JSONDecodeError:
             return {}
 
-    def login(self, user_id: str, password: str | None = None, did: str = None, sid: str = "micoapi") -> Optional[Dict[str, Any]]:
+    def login(self, user_id: str, password: str | None = None, did: str = None, sid: str = "micoapi", max_retries: int = 5, retry_delay: int = 10) -> Optional[Dict[str, Any]]:
         """
         Perform OAuth2 authentication with Xiaomi account.
 
@@ -100,6 +100,8 @@ class XiaomiAuth:
             password: Account password (optional, will read from XIAOMI_PASSWORD env if not provided)
             did: Device ID (optional)
             sid: Service ID (default: micoapi)
+            max_retries: Maximum number of retries for security verification (default: 5)
+            retry_delay: Delay in seconds between retries (default: 10)
 
         Returns:
             Account dictionary with credentials, or None on failure
@@ -135,14 +137,39 @@ class XiaomiAuth:
                 print("Failed to submit credentials")
                 return None
 
-        # Check for security verification
-        if not pass_info.get("location") or not pass_info.get("nonce") or not pass_info.get("passToken"):
+        # Check for security verification and handle with retry
+        for attempt in range(max_retries):
+            if pass_info.get("location") and pass_info.get("nonce") and pass_info.get("passToken"):
+                break  # Got tokens, proceed
+
             if pass_info.get("notificationUrl") or pass_info.get("captchaUrl"):
-                print("\nSecurity verification required!")
-                print("Please open the following link in your browser and authorize:")
-                print(pass_info.get("notificationUrl") or pass_info.get("captchaUrl"))
-                print("\nNote: After authorization, please wait about 1 hour before retrying.")
-            print("Login failed: missing required parameters")
+                if attempt == 0:
+                    print("\n" + "=" * 50)
+                    print("Security verification required!")
+                    print("=" * 50)
+                    print("\nPlease complete ONE of the following:")
+                    print("1. If you have a Mi Account notification on your phone, click it to authorize")
+                    print("2. Open the link below in your browser and authorize:")
+                    print(pass_info.get("notificationUrl") or pass_info.get("captchaUrl"))
+                    print("\nAfter completing verification, the program will automatically retry.")
+                    print("=" * 50)
+                print(f"\nRetry {attempt + 1}/{max_retries}: Waiting for verification...")
+                print(f"Retrying in {retry_delay} seconds... (press Ctrl+C to cancel)")
+                time.sleep(retry_delay)
+
+                # Re-submit credentials to check if verification is complete
+                pass_info = self._submit_credentials(pass_info, user_id, password, sid)
+                if not pass_info:
+                    print("Failed to re-submit credentials")
+                    return None
+            else:
+                # No security verification URL but still no tokens - give up
+                break
+
+        # Final check for tokens
+        if not pass_info.get("location") or not pass_info.get("nonce") or not pass_info.get("passToken"):
+            print("\nLogin failed: Could not obtain required parameters after multiple attempts")
+            print(f"Response: {pass_info}")
             return None
 
         # Step 3: Get service token

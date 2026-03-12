@@ -183,6 +183,8 @@ class XiaomiConfig(Base):
     allow_from: list[str] = Field(default_factory=list)  # Allowed user IDs (currently only supports single user "default")
     poll_interval_seconds: int = 2  # How often to check for new voice input
     trigger_keywords: list[str] = Field(default_factory=lambda: ["让小茹箩"])  # Keywords that trigger nanobot (e.g. "让小茹箩")
+    feishu_fallback_prompt: str = ""  # Prompt to play on speaker when reply goes via Feishu (e.g. "小C罗，我已经通过飞书把结果发给您了")
+    enable_interrupt: bool = True  # Whether to try interrupting Xiaoice's response when trigger keyword is detected
 
 
 class WebChannelConfig(Base):

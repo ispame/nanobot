@@ -20,6 +20,8 @@ def main():
     parser.add_argument("-d", "--did", help="Device ID (optional)")
     parser.add_argument("-o", "--output", default=".mi.json", help="Output file path (default: .mi.json)")
     parser.add_argument("-s", "--sid", default="micoapi", help="Service ID (default: micoapi)")
+    parser.add_argument("-r", "--retries", type=int, default=2, help="Max retries for security verification (default: 5)")
+    parser.add_argument("-t", "--retry-delay", type=int, default=10, help="Delay in seconds between retries (default: 10)")
 
     args = parser.parse_args()
 
@@ -45,6 +47,8 @@ def main():
         password=args.password,
         did=args.did,
         sid=args.sid,
+        max_retries=args.retries,
+        retry_delay=args.retry_delay,
     )
 
     if not account:

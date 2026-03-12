@@ -850,6 +850,56 @@ class MiOTService:
         """Close the HTTP client."""
         await self._client.aclose()
 
+    async def stop_playback(self) -> bool:
+        """Stop current playback on the device.
+
+        This attempts to stop any currently playing audio on the Xiaomi speaker
+        by calling the mediaplayer's stop operation via ubus.
+
+        Returns:
+            True if stop command was sent successfully, False otherwise.
+        """
+        if not self._service_token:
+            if not await self.login():
+                return False
+
+        if not self._device_info:
+            logger.error("No device configured for stop playback")
+            return False
+
+        try:
+            # Use MiNA API to send stop command via ubus
+            url = f"{self.MINA_API}/remote/ubus"
+
+            payload = {
+                "deviceId": self._device_info.get("deviceId"),
+                "path": "mediaplayer",
+                "method": "player_play_operation",
+                "message": json.dumps({"action": "stop"}),
+                "requestId": str(uuid.uuid4()),
+                "timestamp": int(time.time()),
+            }
+
+            headers = {
+                "User-Agent": "MICO/AndroidApp/@SHIP.TO.2A2FE0D7@/2.4.40",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Cookie": self._build_mina_cookies(),
+            }
+
+            response = await self._client.post(url, data=payload, headers=headers)
+
+            if response.status_code == 200:
+                result = response.json()
+                logger.debug("Stop playback sent: {}", result)
+                return True
+            else:
+                logger.warning("Stop playback failed: {} - {}", response.status_code, response.text)
+                return False
+
+        except Exception as e:
+            logger.error("MiOT stop playback error: {}", e)
+            return False
+
     @property
     def is_logged_in(self) -> bool:
         """Check if logged in."""
