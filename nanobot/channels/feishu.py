@@ -7,7 +7,7 @@ import re
 import threading
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -19,6 +19,9 @@ from nanobot.config.schema import FeishuConfig
 import importlib.util
 
 FEISHU_AVAILABLE = importlib.util.find_spec("lark_oapi") is not None
+
+if TYPE_CHECKING:
+    from nanobot.claude.handler import ClaudeMessageHandler
 
 # Message type display mapping
 MSG_TYPE_MAP = {
@@ -244,9 +247,15 @@ class FeishuChannel(BaseChannel):
 
     name = "feishu"
 
-    def __init__(self, config: FeishuConfig, bus: MessageBus):
+    def __init__(
+        self,
+        config: FeishuConfig,
+        bus: MessageBus,
+        claude_handler: "ClaudeMessageHandler | None" = None,
+    ):
         super().__init__(config, bus)
         self.config: FeishuConfig = config
+        self.claude_handler = claude_handler
         self._client: Any = None
         self._ws_client: Any = None
         self._ws_thread: threading.Thread | None = None
@@ -763,19 +772,41 @@ class FeishuChannel(BaseChannel):
             if not content and not media_paths:
                 return
 
-            # Forward to message bus
             reply_to = chat_id if chat_type == "group" else sender_id
-            await self._handle_message(
-                sender_id=sender_id,
-                chat_id=reply_to,
-                content=content,
-                media=media_paths,
-                metadata={
-                    "message_id": message_id,
-                    "chat_type": chat_type,
-                    "msg_type": msg_type,
-                }
-            )
+
+            # Check if Claude Code handler should handle this message
+            if self.claude_handler:
+                # Handle via Claude Code
+                async def progress_callback(text: str):
+                    """Send progress updates to user."""
+                    from nanobot.bus.events import OutboundMessage
+                    await self.bus.publish_outbound(OutboundMessage(
+                        channel=self.name,
+                        chat_id=reply_to,
+                        content=text,
+                        metadata={"_progress": True},
+                    ))
+
+                await self.claude_handler.handle_message(
+                    sender_id=sender_id,
+                    content=content,
+                    channel=self.name,
+                    chat_id=reply_to,
+                    on_progress=progress_callback,
+                )
+            else:
+                # Forward to message bus (normal agent flow)
+                await self._handle_message(
+                    sender_id=sender_id,
+                    chat_id=reply_to,
+                    content=content,
+                    media=media_paths,
+                    metadata={
+                        "message_id": message_id,
+                        "chat_type": chat_type,
+                        "msg_type": msg_type,
+                    }
+                )
 
         except Exception as e:
             logger.error("Error processing Feishu message: {}", e)

@@ -451,8 +451,34 @@ def gateway(
         return response
     cron.on_job = on_cron_job
 
+    # Initialize Claude Code handler if enabled
+    claude_handler = None
+    if config.channels.claude_code.enabled:
+        from nanobot.claude.handler import ClaudeMessageHandler
+        from nanobot.claude.router import SessionRouter
+        from nanobot.claude.session import SessionStore
+
+        console.print("[cyan]Claude Code remote control enabled[/cyan]")
+
+        # Create session store
+        session_store = SessionStore(config.session_dir_path)
+
+        # Create session router
+        session_router = SessionRouter(
+            config=config.channels.claude_code,
+            bus=bus,
+            session_store=session_store,
+        )
+
+        # Create handler
+        claude_handler = ClaudeMessageHandler(
+            config=config.channels.claude_code,
+            bus=bus,
+            router=session_router,
+        )
+
     # Create channel manager
-    channels = ChannelManager(config, bus)
+    channels = ChannelManager(config, bus, claude_handler=claude_handler)
 
     def _pick_heartbeat_target() -> tuple[str, str]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""
@@ -532,6 +558,9 @@ def gateway(
             cron.stop()
             agent.stop()
             await channels.stop_all()
+            # Clean up Claude Code handler
+            if claude_handler:
+                await claude_handler.close()
 
     asyncio.run(run())
 

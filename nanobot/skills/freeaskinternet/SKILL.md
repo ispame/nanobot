@@ -2,7 +2,7 @@
 name: freeaskinternet
 description: 使用 FreeAskInternet 进行网络搜索和信息整理。支持 Bing、百度、DuckDuckGo 等搜索引擎，结合 LLM 生成答案。
 homepage: https://github.com/nashsu/FreeAskInternet
-metadata: {"nanobot":{"emoji":"🔍","requires":{"docker":true,"ports":[3000,3030]}}}
+metadata: {"nanobot":{"emoji":"🔍","requires":{"docker":true,"ports":[3000,3030,18080]}}}
 ---
 
 # FreeAskInternet 网络搜索
@@ -28,15 +28,15 @@ SEARCH_ENGINE=baidu docker compose up -d
 
 ## API 端点
 
-后端 API: http://localhost:8000
+后端 API: http://localhost:18080
 
 ### 直接调用搜索
 
 ```bash
 # 调用后端 API 进行搜索
-curl -X POST http://localhost:8000/search \
+curl -X POST http://localhost:18080/api/search/get_search_refs \
   -H "Content-Type: application/json" \
-  -d '{"query": "Python 教程", "engine": "bing"}'
+  -d '{"query": "Python 教程", "model": "gpt-3.5-turbo", "ask_type": "search"}'
 ```
 
 ## 使用场景

@@ -219,6 +219,22 @@ class MatrixConfig(Base):
     group_allow_from: list[str] = Field(default_factory=list)
     allow_room_mentions: bool = False
 
+
+class ClaudeCodeConfig(Base):
+    """Claude Code remote control configuration."""
+
+    enabled: bool = False
+    claude_path: str = "claude"  # Claude CLI path
+    config_dir: str = "~/.claude"  # Claude config directory
+    permission_mode: str = "auto"  # auto, bypass, or ask
+    default_model: str = "claude-sonnet-4-6-20250514"
+    allowed_tools: list[str] = Field(default_factory=list)  # Allowed tool list (empty = all)
+    disallowed_tools: list[str] = Field(default_factory=list)  # Disallowed tool list
+    mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+    max_sessions_per_user: int = 10  # Max sessions per user
+    session_dir: str = "~/.nanobot/sessions"  # Session storage directory
+
+
 class ChannelsConfig(Base):
     """Configuration for chat channels."""
 
@@ -236,6 +252,7 @@ class ChannelsConfig(Base):
     xiaomi: XiaomiConfig = Field(default_factory=XiaomiConfig)
     web: WebChannelConfig = Field(default_factory=WebChannelConfig)
     matrix: MatrixConfig = Field(default_factory=MatrixConfig)
+    claude_code: ClaudeCodeConfig = Field(default_factory=ClaudeCodeConfig)
 
 
 class AgentDefaults(Base):
@@ -356,6 +373,11 @@ class Config(BaseSettings):
     def workspace_path(self) -> Path:
         """Get expanded workspace path."""
         return Path(self.agents.defaults.workspace).expanduser()
+
+    @property
+    def session_dir_path(self) -> Path:
+        """Get expanded Claude Code session directory path."""
+        return Path(self.channels.claude_code.session_dir).expanduser()
 
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
         """Match provider config and its registry name. Returns (config, spec_name)."""
