@@ -284,7 +284,8 @@ class FeishuChannel(BaseChannel):
             .build()
 
         # Create event handler (register message receive and other needed events)
-        event_handler = lark.EventDispatcherHandler.builder(
+        # Note: p2_card_action_trigger requires im.card.action.trigger permission in Feishu Open Platform
+        event_handler_builder = lark.EventDispatcherHandler.builder(
             self.config.encrypt_key or "",
             self.config.verification_token or "",
         ).register_p2_im_message_receive_v1(
@@ -295,7 +296,15 @@ class FeishuChannel(BaseChannel):
             self._on_message_reaction_created
         ).register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(
             self._on_bot_p2p_chat_entered
-        ).build()
+        )
+
+        # Try to register card action trigger (requires im.card.action.trigger permission)
+        try:
+            event_handler_builder.register_p2_card_action_trigger(self._on_interactive_card_sync)
+        except AttributeError:
+            logger.warning("Card action trigger not available - need to add im.card.action.trigger permission in Feishu Open Platform")
+
+        event_handler = event_handler_builder.build()
 
         # Create WebSocket client for long connection
         self._ws_client = lark.ws.Client(
@@ -676,7 +685,12 @@ class FeishuChannel(BaseChannel):
                         )
 
             if msg.content and msg.content.strip():
-                card = {"config": {"wide_screen_mode": True}, "elements": self._build_card_elements(msg.content)}
+                # Check if message has interactive buttons (from metadata)
+                interactive_buttons = msg.metadata.get("interactive_buttons") if msg.metadata else None
+                if interactive_buttons:
+                    card = self._build_interactive_card(msg.content, interactive_buttons)
+                else:
+                    card = {"config": {"wide_screen_mode": True}, "elements": self._build_card_elements(msg.content)}
                 await loop.run_in_executor(
                     None, self._send_message_sync,
                     receive_id_type, msg.chat_id, "interactive", json.dumps(card, ensure_ascii=False),
@@ -684,6 +698,63 @@ class FeishuChannel(BaseChannel):
 
         except Exception as e:
             logger.error("Error sending Feishu message: {}", e)
+
+    def _build_interactive_card(self, content: str, buttons: list[dict]) -> dict:
+        """Build an interactive card with buttons."""
+        elements = self._build_card_elements(content)
+
+        # Add button actions
+        action_elements = []
+        for button in buttons:
+            btn = {
+                "tag": "button",
+                "text": {
+                    "tag": "plain_text",
+                    "content": button.get("label", "Button"),
+                },
+                "type": button.get("type", "default"),
+                "value": button.get("value", {}),
+            }
+            action_elements.append(btn)
+
+        if action_elements:
+            elements.append({
+                "tag": "action",
+                "actions": action_elements,
+            })
+
+        return {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": "Claude Code",
+                },
+            },
+            "elements": elements,
+        }
+
+    async def send_interactive_card(
+        self,
+        chat_id: str,
+        content: str,
+        buttons: list[dict],
+    ) -> None:
+        """Send an interactive card with buttons to a chat."""
+        if not self._client:
+            logger.warning("Feishu client not initialized")
+            return
+
+        try:
+            receive_id_type = "chat_id" if chat_id.startswith("oc_") else "open_id"
+            loop = asyncio.get_running_loop()
+            card = self._build_interactive_card(content, buttons)
+            await loop.run_in_executor(
+                None, self._send_message_sync,
+                receive_id_type, chat_id, "interactive", json.dumps(card, ensure_ascii=False),
+            )
+        except Exception as e:
+            logger.error("Error sending Feishu interactive card: {}", e)
 
     def _on_bot_p2p_chat_entered(self, data) -> None:
         """
@@ -705,6 +776,70 @@ class FeishuChannel(BaseChannel):
         This event is triggered when a user adds a reaction to a message.
         """
         logger.debug("Feishu: message_reaction_created event received")
+
+    def _on_interactive_card_sync(self, data) -> None:
+        """
+        Sync handler for interactive card button clicks (called from WebSocket thread).
+        Schedules async handling in the main event loop.
+        """
+        if self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(self._on_interactive_card(data), self._loop)
+
+    async def _on_interactive_card(self, data) -> None:
+        """
+        Handler for interactive card button click events.
+        This handles button clicks from interactive cards sent by the bot.
+        """
+        try:
+            event = data.event
+            message = event.message
+            action = event.action
+
+            # Get the button value
+            action_value = action.get("value", {}) if action else {}
+            if isinstance(action_value, str):
+                try:
+                    action_value = json.loads(action_value)
+                except json.JSONDecodeError:
+                    action_value = {"raw": action_value}
+
+            # Get user info
+            sender = event.sender
+            sender_id = sender.sender_id.open_id if sender and sender.sender_id else "unknown"
+            chat_id = message.chat_id if message else None
+
+            logger.info(f"Interactive card action: {action_value}, from user: {sender_id}")
+
+            # Check if this is a Claude Code action
+            if self.claude_handler and action_value.get("type") == "claude_command":
+                command = action_value.get("command", "")
+                option = action_value.get("option", "")
+
+                if command == "plan_option" and option:
+                    # User selected a plan option
+                    content = f"/select {option}"
+                    reply_to = chat_id if chat_id else sender_id
+
+                    async def progress_callback(text: str):
+                        """Send progress updates to user."""
+                        from nanobot.bus.events import OutboundMessage
+                        await self.bus.publish_outbound(OutboundMessage(
+                            channel=self.name,
+                            chat_id=reply_to,
+                            content=text,
+                            metadata={"_progress": True},
+                        ))
+
+                    await self.claude_handler.handle_message(
+                        sender_id=sender_id,
+                        content=content,
+                        channel=self.name,
+                        chat_id=reply_to,
+                        on_progress=progress_callback,
+                    )
+
+        except Exception as e:
+            logger.error("Error processing interactive card event: {}", e)
 
     def _on_message_sync(self, data: "P2ImMessageReceiveV1") -> None:
         """

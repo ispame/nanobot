@@ -51,6 +51,17 @@ class ChannelManager:
             except ImportError as e:
                 logger.warning("Telegram channel not available: {}", e)
 
+        # Android channel
+        if self.config.channels.android.enabled:
+            try:
+                from nanobot.channels.android import AndroidChannel
+                self.channels["android"] = AndroidChannel(
+                    self.config.channels.android, self.bus
+                )
+                logger.info("Android channel enabled")
+            except ImportError as e:
+                logger.warning("Android channel not available: {}", e)
+
         # WhatsApp channel
         if self.config.channels.whatsapp.enabled:
             try:

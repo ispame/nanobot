@@ -264,17 +264,47 @@ class MiOTService:
             return asyncio.run(do_login())
 
     async def reauthenticate(self) -> bool:
-        """Re-authenticate using environment variable credentials.
+        """Re-authenticate using environment variable credentials or .env file.
 
         Returns:
             True if login successful, False otherwise
         """
+        # Try to load from .env if environment variables are missing
         if not self._env_user_id or not self._env_password:
-            logger.warning("Cannot re-authenticate: missing environment credentials")
+            logger.info("Environment credentials missing, trying to load from .env file...")
+            env_path = Path(self.config_path).parent / ".env" if self.config_path else Path(".env")
+            if not env_path.exists():
+                env_path = Path(__file__).parent.parent.parent / ".env"
+
+            if env_path.exists():
+                try:
+                    from dotenv import load_dotenv
+                    load_dotenv(env_path)
+                    logger.debug("Loaded .env from {}", env_path)
+                except ImportError:
+                    # Fallback: parse .env manually
+                    logger.debug("python-dotenv not installed, parsing .env manually...")
+                    with open(env_path) as f:
+                        for line in f:
+                            line = line.strip()
+                            if line and not line.startswith("#") and "=" in line:
+                                key, _, value = line.partition("=")
+                                import os
+                                os.environ.setdefault(key.strip(), value.strip())
+
+            # Try to get credentials from environment again
+            import os
+            self._env_user_id = os.environ.get("XIAOMI_USER_ID")
+            self._env_password = os.environ.get("XIAOMI_PASSWORD")
+            self._env_did = os.environ.get("XIAOMI_DID")
+
+        if not self._env_user_id or not self._env_password:
+            logger.warning("Cannot re-authenticate: missing credentials in .env file")
             return False
 
         try:
             logger.info("Re-authenticating with Xiaomi account...")
+            logger.debug("Using userId: {}, did: {}", self._env_user_id, self._env_did)
 
             # Use XiaomiAuth to login
             auth = XiaomiAuth()
@@ -408,7 +438,18 @@ class MiOTService:
                 # Try full re-authentication
                 return await self.reauthenticate()
 
-            result = response.json()
+            # Check if response is empty or not JSON
+            if not response.text or not response.text.strip():
+                logger.warning("Empty response when refreshing token, attempting re-authentication...")
+                return await self.reauthenticate()
+
+            try:
+                result = response.json()
+            except Exception as e:
+                logger.warning("Failed to parse JSON response when refreshing token: {}", e)
+                logger.debug("Response content: {}", response.text[:200])
+                return await self.reauthenticate()
+
             if result.get("code") != 0:
                 # Need to re-authenticate with password
                 logger.warning("Token refresh requires re-authentication, attempting full re-login...")
@@ -838,7 +879,46 @@ class MiOTService:
                                 })
                             return conversations
                 else:
-                    logger.warning("Token refresh failed")
+                    logger.warning("Token refresh failed, attempting re-authentication...")
+                    if await self.reauthenticate():
+                        logger.info("Re-authentication successful, retrying conversation history request...")
+                        # Retry the request with new token
+                        cookies["serviceToken"] = self._service_token
+                        response = await self._client.get(
+                            url,
+                            params=params,
+                            headers=headers,
+                            cookies=cookies,
+                        )
+                        if response.status_code == 200:
+                            result = response.json()
+                            if result.get("code") == 0:
+                                data = result.get("data")
+                                if isinstance(data, str):
+                                    import json as json_mod
+                                    data = json_mod.loads(data)
+                                records = data.get("records", []) if isinstance(data, dict) else []
+                                conversations = []
+                                for record in records:
+                                    query_data = record.get("query", {})
+                                    query_text = query_data.get("text", "") if isinstance(query_data, dict) else str(query_data)
+                                    answers = record.get("answers", [])
+                                    answer_text = ""
+                                    if answers:
+                                        first_answer = answers[0]
+                                        if first_answer.get("type") == "TTS":
+                                            answer_text = first_answer.get("tts", {}).get("text", "") or ""
+                                        elif first_answer.get("type") == "LLM":
+                                            answer_text = first_answer.get("llm", {}).get("text", "") or ""
+                                    conversations.append({
+                                        "id": str(record.get("time", "")),
+                                        "query": query_text,
+                                        "answer": answer_text,
+                                        "timestamp": record.get("time"),
+                                        "time": record.get("time"),
+                                    })
+                                return conversations
+                    logger.error("Re-authentication failed")
 
             return []
 

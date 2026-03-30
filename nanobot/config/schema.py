@@ -33,6 +33,18 @@ class TelegramConfig(Base):
     reply_to_message: bool = False  # If true, bot replies quote the original message
 
 
+class AndroidConfig(Base):
+    """Android remote control channel configuration."""
+
+    enabled: bool = False
+    host: str = "0.0.0.0"
+    port: int = 8765
+    allow_from: list[str] = Field(default_factory=list)  # Allowed device IDs
+    asr_url: str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel"
+    asr_app_id: str = ""  # 应用ID (对应 X-Api-App-Key)
+    asr_access_key: str = ""  # 访问密钥 (对应 X-Api-Access-Key)
+
+
 class FeishuConfig(Base):
     """Feishu/Lark channel configuration using WebSocket long connection."""
 
@@ -242,6 +254,7 @@ class ChannelsConfig(Base):
     send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("…"))
     whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+    android: AndroidConfig = Field(default_factory=AndroidConfig)
     discord: DiscordConfig = Field(default_factory=DiscordConfig)
     feishu: FeishuConfig = Field(default_factory=FeishuConfig)
     mochat: MochatConfig = Field(default_factory=MochatConfig)

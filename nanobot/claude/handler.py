@@ -90,7 +90,18 @@ class ClaudeMessageHandler:
                     ))
                     return True
 
-            # Handle session commands
+            # Nanobot built-in commands that should NOT be forwarded to Claude Code
+            NANOBOT_COMMANDS = {"/claude", "/session", "/new", "/list", "/switch", "/close", "/closeall", "/help"}
+
+            # Handle Claude Code built-in / commands - forward to Claude Code
+            # All / commands EXCEPT nanobot built-ins are forwarded to Claude Code
+            if command.startswith("/") and command not in NANOBOT_COMMANDS and not command.startswith("/session"):
+                # Forward to Claude Code as a regular message
+                return await self._forward_to_claude(
+                    sender_id, content, channel, chat_id, on_progress
+                )
+
+            # Handle session commands (e.g., /session new, /session list)
             response = await self.router.handle_command(sender_id, command, args)
 
             await self.bus.publish_outbound(OutboundMessage(
@@ -100,13 +111,24 @@ class ClaudeMessageHandler:
             ))
             return True
 
-        # Check if Claude Code is enabled
+        return await self._forward_to_claude(
+            sender_id, content, channel, chat_id, on_progress
+        )
+
+    async def _forward_to_claude(
+        self,
+        sender_id: str,
+        content: str,
+        channel: str,
+        chat_id: str,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> bool:
+        """Forward a message to Claude Code."""
         if not self._enabled:
             logger.info("Claude Code is disabled, ignoring message")
             return False
 
-        # Send to Claude Code
-        logger.info(f"Sending to Claude Code: user={sender_id}, content={content[:50]}...")
+        logger.info(f"Forwarding to Claude Code: user={sender_id}, content={content[:50]}...")
         try:
             response = await self.router.send_message(
                 sender_id,
@@ -128,6 +150,116 @@ class ClaudeMessageHandler:
                 channel=channel,
                 chat_id=chat_id,
                 content=f"抱歉，发生错误: {str(e)}",
+            ))
+            return True
+
+    async def _handle_mode_command(
+        self,
+        user_id: str,
+        mode: str,
+        args: str | None,
+        channel: str,
+        chat_id: str,
+    ) -> bool:
+        """Handle Claude Code mode switching commands."""
+        session_id = self.router.get_user_session_id(user_id)
+        if not session_id:
+            await self.bus.publish_outbound(OutboundMessage(
+                channel=channel,
+                chat_id=chat_id,
+                content="❌ 没有活动的会话，请先发送消息创建会话",
+            ))
+            return True
+
+        session = self.router._sessions.get(session_id)
+        if not session or not session.is_active:
+            await self.bus.publish_outbound(OutboundMessage(
+                channel=channel,
+                chat_id=chat_id,
+                content="❌ 会话已失效，请创建新会话",
+            ))
+            return True
+
+        try:
+            if mode == "plan":
+                # Enter plan mode - just forward the /plan command
+                response = await self.router.send_message(user_id, "/plan")
+                await self.bus.publish_outbound(OutboundMessage(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content=response,
+                ))
+            elif mode == "one":
+                # Single turn mode - send as message to Claude Code
+                response = await self.router.send_message(user_id, "--one")
+                await self.bus.publish_outbound(OutboundMessage(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content=response,
+                ))
+            elif mode == "auto":
+                # Auto mode
+                response = await self.router.send_message(user_id, "/auto")
+                await self.bus.publish_outbound(OutboundMessage(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content=response,
+                ))
+            elif mode == "auto-approve":
+                # Auto approve mode
+                response = await self.router.send_message(user_id, "/auto-approve on")
+                await self.bus.publish_outbound(OutboundMessage(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content=response,
+                ))
+            elif mode == "bypass":
+                # Bypass permissions - use control request
+                if session._process:
+                    result = await session._process.send_control_request({
+                        "subtype": "permission_bypass",
+                    })
+                    await self.bus.publish_outbound(OutboundMessage(
+                        channel=channel,
+                        chat_id=chat_id,
+                        content=f"✅ 已启用权限绕过模式",
+                    ))
+                else:
+                    await self.bus.publish_outbound(OutboundMessage(
+                        channel=channel,
+                        chat_id=chat_id,
+                        content="❌ 无法执行，进程未启动",
+                    ))
+            elif mode == "default":
+                # Reset to default mode
+                if session._process:
+                    result = await session._process.send_control_request({
+                        "subtype": "reset_settings",
+                    })
+                    await self.bus.publish_outbound(OutboundMessage(
+                        channel=channel,
+                        chat_id=chat_id,
+                        content="✅ 已恢复默认设置",
+                    ))
+                else:
+                    await self.bus.publish_outbound(OutboundMessage(
+                        channel=channel,
+                        chat_id=chat_id,
+                        content="❌ 无法执行，进程未启动",
+                    ))
+            else:
+                await self.bus.publish_outbound(OutboundMessage(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content=f"未知模式: {mode}",
+                ))
+            return True
+        except Exception as e:
+            logger.error(f"Error handling mode command: {e}")
+            await self.bus.publish_outbound(OutboundMessage(
+                channel=channel,
+                chat_id=chat_id,
+                content=f"❌ 执行失败: {str(e)}",
             ))
             return True
 

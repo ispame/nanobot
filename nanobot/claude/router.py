@@ -311,6 +311,10 @@ class SessionRouter:
 /session close - 关闭当前会话
 /session closeall - 关闭所有会话
 
+Claude Code 命令:
+直接发送 / 开头的命令会转发给 Claude Code 处理，例如:
+/pwd, /model, /tokens, /tasks, /plan, /clear, /compact, /bypass 等
+
 直接发送消息即可继续对话"""
 
         if cmd in ("help", "?"):
@@ -321,6 +325,10 @@ class SessionRouter:
 /session switch <编号> - 切换会话
 /session close - 关闭当前会话
 /session closeall - 关闭所有会话
+
+Claude Code 命令:
+直接发送 / 开头的命令会转发给 Claude Code 处理，例如:
+/pwd, /model, /tokens, /tasks, /plan, /clear, /compact, /bypass 等
 
 直接发送消息即可继续对话"""
 
