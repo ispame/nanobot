@@ -36,6 +36,7 @@ class AndroidChannel(BaseChannel):
         self.asr_streams: dict[str, Any] = {}                   # client_id -> AsrStreamer
         self.asr_ready: dict[str, asyncio.Event] = {}            # client_id -> 连接就绪事件
         self.pending_chunks: dict[str, list[bytes]] = {}         # client_id -> ASR就绪前的待发chunks
+        self.finisher_tasks: dict[str, asyncio.Task] = {}        # client_id -> _finish_asr_stream task
 
     async def start(self) -> None:
         """Start WebSocket server."""
@@ -64,11 +65,19 @@ class AndroidChannel(BaseChannel):
                 await streamer.close()
             except Exception:
                 pass
+        for task in self.finisher_tasks.values():
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
         self.asr_streams.clear()
         self.audio_buffers.clear()
         self.audio_chunks.clear()
         self.asr_ready.clear()
         self.pending_chunks.clear()
+        self.finisher_tasks.clear()
 
         if self.runner:
             await self.runner.cleanup()
@@ -91,6 +100,16 @@ class AndroidChannel(BaseChannel):
                 elif msg.type == web.WSMsgType.ERROR:
                     logger.error(f"WebSocket error: {ws.exception()}")
         finally:
+            # 取消该客户端的 finisher 任务
+            finisher = self.finisher_tasks.pop(client_id, None)
+            if finisher and not finisher.done():
+                finisher.cancel()
+                try:
+                    await finisher
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
             self._cleanup_client(client_id)
             logger.info(f"Android client disconnected: {client_id}")
 
@@ -130,6 +149,16 @@ class AndroidChannel(BaseChannel):
             # ─── 流式音频开始 ───────────────────────────────────────────
             elif msg_type == "audio_start":
                 logger.info(f"[{client_id}] Audio stream started")
+                # 取消旧的 finisher（防止旧流干扰新流）
+                old_finisher = self.finisher_tasks.pop(client_id, None)
+                if old_finisher and not old_finisher.done():
+                    old_finisher.cancel()
+                    try:
+                        await old_finisher
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        pass
                 self.audio_buffers[client_id] = bytearray()
                 self.audio_chunks[client_id] = []
                 self.pending_chunks[client_id] = []
@@ -200,36 +229,35 @@ class AndroidChannel(BaseChannel):
     async def _finish_asr_stream(self, client_id: str, sender_id: str, is_last_chunk: bytes | None = None) -> None:
         """
         结束ASR流式识别：
-        1. 发送最后一个 is_last chunk
-        2. 接收剩余ASR响应
+        1. 发送 is_last=True 结束标记（用send_last_chunk，不重发最后一个chunk数据）
+        2. 接收ASR响应
         3. 关闭连接
         4. 把最终文字送给agent
         """
-        st = self.asr_streams.get(client_id)
-        if not st or st.conn.closed:
-            logger.warning(f"[{client_id}] ASR streamer not available")
-            return
+        # 注册自己到 finisher_tasks（供 audio_start 取消）
+        task = asyncio.current_task()
+        self.finisher_tasks[client_id] = task
 
-        # 发送最后一个 is_last chunk（触发 ASR 返回最终结果）
-        if is_last_chunk:
-            try:
-                await st.send_audio_chunk(is_last_chunk, is_last=True)
-            except Exception as e:
-                logger.error(f"[{client_id}] Failed to send is_last chunk: {e}")
-                await self._send_error(client_id, f"ASR send error: {e}")
-                try:
-                    await st.close()
-                except Exception:
-                    pass
-                self.asr_streams.pop(client_id, None)
-                return
+        st = self.asr_streams.get(client_id)
+        if not st or (st.conn and st.conn.closed):
+            logger.warning(f"[{client_id}] ASR streamer not available")
+            self.finisher_tasks.pop(client_id, None)
+            return
 
         # 清理状态
         self.asr_ready.pop(client_id, None)
         self.pending_chunks.pop(client_id, None)
 
-        # 发送 is_last 结束标记（由 recv_until_last 触发）
+        # 发送 is_last=True 结束标记（触发 ASR 返回最终结果）
+        # 注意：is_last_chunk 已经在 audio_chunk handler 里通过 send_raw_chunk 发送过了，
+        # 这里只需要发送一个空的 is_last=True 帧来通知 ASR 结束即可。
         try:
+            if is_last_chunk:
+                await st.send_last_chunk(is_last_chunk)
+            else:
+                # 没有chunk数据时，用空数据发is_last
+                await st.send_last_chunk(b'')
+
             all_texts = []
             async for response in st.recv_until_last():
                 if response.payload_msg:
@@ -240,7 +268,6 @@ class AndroidChannel(BaseChannel):
                         await self._send_asr_partial(client_id, text)
 
             await st.close()
-            self.asr_streams.pop(client_id, None)
 
             final_text = all_texts[-1] if all_texts else ''
             if final_text:
@@ -255,7 +282,6 @@ class AndroidChannel(BaseChannel):
                 await st.close()
             except Exception:
                 pass
-            self.asr_streams.pop(client_id, None)
             raise
         except Exception as e:
             logger.error(f"[{client_id}] Error finishing ASR stream: {e}")
@@ -264,6 +290,8 @@ class AndroidChannel(BaseChannel):
                 await st.close()
             except Exception:
                 pass
+        finally:
+            self.finisher_tasks.pop(client_id, None)
             self.asr_streams.pop(client_id, None)
 
     async def _process_audio_batch(self, audio_base64: str, sender_id: str, chat_id: str) -> None:

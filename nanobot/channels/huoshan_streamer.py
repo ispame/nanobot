@@ -250,6 +250,17 @@ class AsrStreamer:
         except Exception as e:
             logger.error(f"[AsrStreamer] send_raw_chunk error: {e}")
 
+    async def send_last_chunk(self, chunk: bytes) -> None:
+        """发送最后一个 is_last=True chunk，触发 ASR 返回最终结果（不带sleep）"""
+        if not self.conn or self.conn.closed:
+            logger.warning("[AsrStreamer] Cannot send last chunk, connection not ready")
+            return
+        req = build_audio_request(self.seq, chunk, is_last=True)
+        try:
+            await self.conn.send_bytes(req)
+        except Exception as e:
+            logger.error(f"[AsrStreamer] send_last_chunk error: {e}")
+
     async def recv_one(self) -> AsrResponse | None:
         """接收一条ASR响应"""
         try:
