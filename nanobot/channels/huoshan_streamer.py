@@ -202,6 +202,7 @@ class AsrStreamer:
         self.seq = 1
         self.conn: aiohttp.ClientWebSocketResponse | None = None
         self.session: aiohttp.ClientSession | None = None
+        self._active = True  # False when connection is confirmed dead
 
     def _auth_headers(self) -> dict:
         reqid = str(uuid.uuid4())
@@ -241,7 +242,7 @@ class AsrStreamer:
 
     async def send_raw_chunk(self, chunk: bytes) -> None:
         """发送一个音频chunk（无sleep，用于流式转发，不阻塞消息处理）"""
-        if not self.conn or self.conn.closed:
+        if not self.conn or self.conn.closed or not self._active:
             return
         req = build_audio_request(self.seq, chunk, is_last=False)
         self.seq += 1
@@ -249,17 +250,20 @@ class AsrStreamer:
             await self.conn.send_bytes(req)
         except Exception as e:
             logger.error(f"[AsrStreamer] send_raw_chunk error: {e}")
+            self._active = False
 
     async def send_last_chunk(self, chunk: bytes) -> None:
         """发送最后一个 is_last=True chunk，触发 ASR 返回最终结果（不带sleep）"""
-        if not self.conn or self.conn.closed:
+        if not self.conn or self.conn.closed or not self._active:
             logger.warning("[AsrStreamer] Cannot send last chunk, connection not ready")
+            self._active = False
             return
         req = build_audio_request(self.seq, chunk, is_last=True)
         try:
             await self.conn.send_bytes(req)
         except Exception as e:
             logger.error(f"[AsrStreamer] send_last_chunk error: {e}")
+            self._active = False
 
     async def recv_one(self) -> AsrResponse | None:
         """接收一条ASR响应"""
@@ -308,6 +312,7 @@ class AsrStreamer:
 
     async def close(self) -> None:
         """关闭连接"""
+        self._active = False
         if self.conn and not self.conn.closed:
             await self.conn.close()
         if self.session and not self.session.closed:

@@ -187,10 +187,11 @@ class AndroidChannel(BaseChannel):
                     ready = self.asr_ready.get(client_id)
                     if ready and ready.is_set():
                         st = self.asr_streams.get(client_id)
-                        if st and not st.conn.closed:
+                        if st and st._active and st.conn and not st.conn.closed:
                             await st.send_raw_chunk(chunk)
                         else:
-                            self.pending_chunks.setdefault(client_id, []).append(chunk)
+                            # ASR 已死，丢弃这些 chunks
+                            self.pending_chunks.pop(client_id, None)
                     else:
                         self.pending_chunks.setdefault(client_id, []).append(chunk)
 
@@ -242,11 +243,17 @@ class AndroidChannel(BaseChannel):
         if not st or (st.conn and st.conn.closed):
             logger.warning(f"[{client_id}] ASR streamer not available")
             self.finisher_tasks.pop(client_id, None)
+            self.pending_chunks.pop(client_id, None)
             return
 
         # 清理状态
         self.asr_ready.pop(client_id, None)
         self.pending_chunks.pop(client_id, None)
+
+        if not st._active:
+            logger.warning(f"[{client_id}] ASR stream already inactive, skipping")
+            self.finisher_tasks.pop(client_id, None)
+            return
 
         # 发送 is_last=True 结束标记（触发 ASR 返回最终结果）
         # 注意：is_last_chunk 已经在 audio_chunk handler 里通过 send_raw_chunk 发送过了，
