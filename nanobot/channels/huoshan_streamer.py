@@ -230,6 +230,9 @@ class AsrStreamer:
 
     async def send_audio_chunk(self, chunk: bytes, is_last: bool = False) -> None:
         """发送一个音频chunk"""
+        if not self.conn or self.conn.closed:
+            logger.warning("[AsrStreamer] Cannot send, connection not ready or closed")
+            return
         req = build_audio_request(self.seq, chunk, is_last=is_last)
         if not is_last:
             self.seq += 1
@@ -269,50 +272,17 @@ class AsrStreamer:
         except Exception as e:
             logger.error(f"[AsrStreamer] recv_until_last error: {e}")
 
-    async def stream_audio(
-        self,
-        audio_chunks: list[bytes],
-    ) -> AsyncGenerator[AsrResponse, None]:
+    async def send_chunks_and_wait(self, audio_chunks: list[bytes]) -> None:
         """
-        输入音频chunk列表，流式返回ASR响应。
-        策略：先用 asyncio.create_task 并行发送和接收。
+        顺序发送所有音频chunks，等待发送完毕。
+        不做接收（接收由 recv_until_last 或 stream_audio 负责）。
+        发送完毕后正常返回（不是取消）。
         """
-        if not self.conn:
-            await self.connect()
-
-        # 发送初始请求
-        await self._send_full_request()
-
-        # 短暂等待服务器就绪
-        await asyncio.sleep(0.05)
-
-        async def sender():
-            for i, chunk in enumerate(audio_chunks):
-                is_last = (i == len(audio_chunks) - 1)
-                await self.send_audio_chunk(chunk, is_last=is_last)
-                if not is_last:
-                    await asyncio.sleep(self.segment_duration / 1000.0)
-
-        sender_task = asyncio.create_task(sender())
-
-        try:
-            async for msg in self.conn:
-                if msg.type == aiohttp.WSMsgType.BINARY:
-                    response = parse_response(msg.data)
-                    yield response
-                    if response.is_last_package or response.code != 0:
-                        break
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error(f"[AsrStreamer] WS error: {msg.data}")
-                    break
-                elif msg.type == aiohttp.WSMsgType.CLOSED:
-                    break
-        finally:
-            sender_task.cancel()
-            try:
-                await sender_task
-            except asyncio.CancelledError:
-                pass
+        for i, chunk in enumerate(audio_chunks):
+            is_last = (i == len(audio_chunks) - 1)
+            await self.send_audio_chunk(chunk, is_last=is_last)
+            if not is_last:
+                await asyncio.sleep(self.segment_duration / 1000.0)
 
     async def close(self) -> None:
         """关闭连接"""
