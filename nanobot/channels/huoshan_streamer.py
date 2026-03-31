@@ -229,7 +229,7 @@ class AsrStreamer:
         logger.debug("[AsrStreamer] Sent full request")
 
     async def send_audio_chunk(self, chunk: bytes, is_last: bool = False) -> None:
-        """发送一个音频chunk"""
+        """发送一个音频chunk（带200ms延迟，用于整体发送场景）"""
         if not self.conn or self.conn.closed:
             logger.warning("[AsrStreamer] Cannot send, connection not ready or closed")
             return
@@ -238,6 +238,17 @@ class AsrStreamer:
             self.seq += 1
         await self.conn.send_bytes(req)
         await asyncio.sleep(self.segment_duration / 1000.0)
+
+    async def send_raw_chunk(self, chunk: bytes) -> None:
+        """发送一个音频chunk（无sleep，用于流式转发，不阻塞消息处理）"""
+        if not self.conn or self.conn.closed:
+            return
+        req = build_audio_request(self.seq, chunk, is_last=False)
+        self.seq += 1
+        try:
+            await self.conn.send_bytes(req)
+        except Exception as e:
+            logger.error(f"[AsrStreamer] send_raw_chunk error: {e}")
 
     async def recv_one(self) -> AsrResponse | None:
         """接收一条ASR响应"""
