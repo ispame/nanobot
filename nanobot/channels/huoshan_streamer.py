@@ -215,19 +215,45 @@ class AsrStreamer:
 
     async def connect(self) -> None:
         """建立WS连接"""
+        import sys
         self.session = aiohttp.ClientSession()
-        self.conn = await self.session.ws_connect(
-            self.url,
-            headers=self._auth_headers(),
-        )
-        logger.info(f"[AsrStreamer] Connected to {self.url}")
+        headers = self._auth_headers()
+        logger.info(f"[AsrStreamer] Connecting to {self.url}")
+        logger.info(f"[AsrStreamer] Auth headers: app_key={self.app_key[:8]}..., access_key={self.access_key[:8]}...")
+        try:
+            self.conn = await self.session.ws_connect(
+                self.url,
+                headers=headers,
+            )
+            logger.info(f"[AsrStreamer] ✅ WS connected to {self.url}")
+        except Exception as e:
+            logger.error(f"[AsrStreamer] ❌ WS connection failed: {e}")
+            raise
 
     async def _send_full_request(self) -> None:
         """发送初始full request"""
         req = build_full_request(self.seq)
         self.seq += 1
+        logger.info(f"[AsrStreamer] Sending full request (seq={self.seq-1}), request size={len(req)} bytes")
         await self.conn.send_bytes(req)
-        logger.debug("[AsrStreamer] Sent full request")
+        logger.info("[AsrStreamer] Full request sent, waiting for server response...")
+
+        # 等待并打印服务器对 full request 的响应
+        try:
+            msg = await asyncio.wait_for(self.conn.receive(), timeout=5.0)
+            if msg.type == aiohttp.WSMsgType.BINARY:
+                resp = parse_response(msg.data)
+                logger.info(f"[AsrStreamer] Full request response: code={resp.code}, is_last={resp.is_last_package}, payload={resp.payload_msg}")
+            elif msg.type == aiohttp.WSMsgType.TEXT:
+                logger.warning(f"[AsrStreamer] Full request response (text): {msg.data}")
+            elif msg.type == aiohttp.WSMsgType.ERROR:
+                logger.error(f"[AsrStreamer] Full request error response: {msg.data}")
+            else:
+                logger.warning(f"[AsrStreamer] Full request unexpected msg type: {msg.type}")
+        except asyncio.TimeoutError:
+            logger.warning("[AsrStreamer] Full request: timeout waiting for server response")
+        except Exception as e:
+            logger.error(f"[AsrStreamer] Full request response error: {e}")
 
     async def send_audio_chunk(self, chunk: bytes, is_last: bool = False) -> None:
         """发送一个音频chunk（带200ms延迟，用于整体发送场景）"""
@@ -243,13 +269,15 @@ class AsrStreamer:
     async def send_raw_chunk(self, chunk: bytes) -> None:
         """发送一个音频chunk（无sleep，用于流式转发，不阻塞消息处理）"""
         if not self.conn or self.conn.closed or not self._active:
+            logger.warning(f"[AsrStreamer] send_raw_chunk: skipped, conn={self.conn is not None}, closed={getattr(self.conn, 'closed', 'N/A')}, active={self._active}")
             return
         req = build_audio_request(self.seq, chunk, is_last=False)
         self.seq += 1
         try:
             await self.conn.send_bytes(req)
+            logger.debug(f"[AsrStreamer] ✅ Sent chunk seq={self.seq-1}, size={len(chunk)}")
         except Exception as e:
-            logger.error(f"[AsrStreamer] send_raw_chunk error: {e}")
+            logger.error(f"[AsrStreamer] ❌ send_raw_chunk error: {e}")
             self._active = False
 
     async def send_last_chunk(self, chunk: bytes) -> None:
@@ -282,18 +310,31 @@ class AsrStreamer:
     async def recv_until_last(self) -> AsyncGenerator[AsrResponse, None]:
         """仅接收响应直到最后一个包（不在此方法中发送任何数据）"""
         try:
+            logger.info("[AsrStreamer] recv_until_last: starting receive loop")
+            count = 0
             async for msg in self.conn:
                 if msg.type == aiohttp.WSMsgType.BINARY:
                     response = parse_response(msg.data)
+                    count += 1
+                    text = ''
+                    if response.payload_msg:
+                        result = response.payload_msg.get('result', {})
+                        text = result.get('text', '') if isinstance(result, dict) else (result if isinstance(result, str) else '')
+                    logger.info(f"[AsrStreamer] recv [{count}]: code={response.code}, is_last={response.is_last_package}, text={text!r}")
                     yield response
                     if response.is_last_package or response.code != 0:
+                        logger.info(f"[AsrStreamer] recv_until_last: terminating (is_last={response.is_last_package}, code={response.code})")
                         break
                 elif msg.type == aiohttp.WSMsgType.ERROR:
                     logger.error(f"[AsrStreamer] WS error: {msg.data}")
                     break
                 elif msg.type == aiohttp.WSMsgType.CLOSED:
+                    logger.warning("[AsrStreamer] WS closed by server")
                     break
+                elif msg.type == aiohttp.WSMsgType.TEXT:
+                    logger.warning(f"[AsrStreamer] Unexpected text message: {msg.data}")
         except asyncio.CancelledError:
+            logger.info("[AsrStreamer] recv_until_last cancelled")
             raise
         except Exception as e:
             logger.error(f"[AsrStreamer] recv_until_last error: {e}")

@@ -177,11 +177,13 @@ class AndroidChannel(BaseChannel):
             elif msg_type == "audio_chunk":
                 chunk_b64 = msg.get("data", "")
                 is_last = msg.get("is_last", False)
+                chunk_seq = msg.get("seq", 0)
 
                 if chunk_b64:
                     chunk = base64.b64decode(chunk_b64)
                     self.audio_buffers.setdefault(client_id, bytearray()).extend(chunk)
                     self.audio_chunks.setdefault(client_id, []).append(chunk)
+                    logger.info(f"[{client_id}] audio_chunk seq={chunk_seq} is_last={is_last} size={len(chunk)}b, total_chunks={len(self.audio_chunks.get(client_id, []))}")
 
                     # ASR 已就绪则立即发送；否则缓存
                     ready = self.asr_ready.get(client_id)
@@ -190,13 +192,15 @@ class AndroidChannel(BaseChannel):
                         if st and st._active and st.conn and not st.conn.closed:
                             await st.send_raw_chunk(chunk)
                         else:
-                            # ASR 已死，丢弃这些 chunks
+                            logger.warning(f"[{client_id}] audio_chunk: ASR inactive/closed, dropping chunk")
                             self.pending_chunks.pop(client_id, None)
                     else:
                         self.pending_chunks.setdefault(client_id, []).append(chunk)
+                        pending_count = len(self.pending_chunks.get(client_id, []))
+                        logger.info(f"[{client_id}] audio_chunk: ASR not ready, queued (pending={pending_count})")
 
                     if is_last:
-                        logger.info(f"[{client_id}] Last chunk, {len(self.audio_chunks.get(client_id, []))} total")
+                        logger.info(f"[{client_id}] Last chunk received, starting finisher...")
                         asyncio.create_task(self._finish_asr_stream(client_id, sender_id, is_last_chunk=chunk))
 
             elif msg_type == "audio_end":
@@ -211,6 +215,7 @@ class AndroidChannel(BaseChannel):
         try:
             from .huoshan_streamer import AsrStreamer
 
+            logger.info(f"[{client_id}] _start_asr_stream: connecting to {self.asr_url}")
             streamer = AsrStreamer(
                 url=self.asr_url,
                 app_key=self.config.asr_app_id,
@@ -220,10 +225,10 @@ class AndroidChannel(BaseChannel):
             self.asr_streams[client_id] = streamer
             await streamer.connect()
             self.asr_ready[client_id].set()
-            logger.info(f"[{client_id}] ASR stream connected")
+            logger.info(f"[{client_id}] ✅ ASR stream connected and ready")
 
         except Exception as e:
-            logger.error(f"[{client_id}] Failed to start ASR stream: {e}")
+            logger.error(f"[{client_id}] ❌ Failed to start ASR stream: {e}")
             self.asr_streams.pop(client_id, None)
             self.asr_ready[client_id].set()  # unblock waiting coroutines
 
@@ -251,19 +256,18 @@ class AndroidChannel(BaseChannel):
         self.pending_chunks.pop(client_id, None)
 
         if not st._active:
-            logger.warning(f"[{client_id}] ASR stream already inactive, skipping")
+            logger.warning(f"[{client_id}] ASR stream already inactive, skipping finisher")
             self.finisher_tasks.pop(client_id, None)
             return
 
         # 发送 is_last=True 结束标记（触发 ASR 返回最终结果）
-        # 注意：is_last_chunk 已经在 audio_chunk handler 里通过 send_raw_chunk 发送过了，
-        # 这里只需要发送一个空的 is_last=True 帧来通知 ASR 结束即可。
         try:
+            logger.info(f"[{client_id}] finisher: sending is_last=True marker (chunk size={len(is_last_chunk) if is_last_chunk else 0})")
             if is_last_chunk:
                 await st.send_last_chunk(is_last_chunk)
             else:
-                # 没有chunk数据时，用空数据发is_last
                 await st.send_last_chunk(b'')
+            logger.info(f"[{client_id}] finisher: is_last sent, now waiting for ASR responses...")
 
             all_texts = []
             async for response in st.recv_until_last():
@@ -275,6 +279,7 @@ class AndroidChannel(BaseChannel):
                         await self._send_asr_partial(client_id, text)
 
             await st.close()
+            logger.info(f"[{client_id}] finisher: recv done, texts={all_texts}")
 
             final_text = all_texts[-1] if all_texts else ''
             if final_text:
@@ -284,14 +289,14 @@ class AndroidChannel(BaseChannel):
                 await self._send_error(client_id, "ASR returned no text")
 
         except asyncio.CancelledError:
-            logger.info(f"[{client_id}] ASR stream cancelled")
+            logger.info(f"[{client_id}] finisher: CancelledError")
             try:
                 await st.close()
             except Exception:
                 pass
             raise
         except Exception as e:
-            logger.error(f"[{client_id}] Error finishing ASR stream: {e}")
+            logger.error(f"[{client_id}] finisher: ❌ Error: {e}")
             await self._send_error(client_id, f"ASR error: {e}")
             try:
                 await st.close()
