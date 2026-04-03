@@ -12,6 +12,7 @@ from nanobot.claude.session import ClaudeSession, SessionStore
 
 if TYPE_CHECKING:
     from nanobot.config.schema import ClaudeCodeConfig
+    from nanobot.claude.client import ClaudeCodeProcess
 
 
 class SessionRouter:
@@ -56,7 +57,7 @@ class SessionRouter:
         return cleaned
 
     async def create_session(
-        self, user_id: str, cwd: str | None = None
+        self, user_id: str, cwd: str | None = None, restore_messages: list | None = None
     ) -> ClaudeSession:
         """Create a new Claude Code session for a user."""
         # Clean up any inactive sessions first
@@ -104,6 +105,10 @@ class SessionRouter:
 
         session.attach_process(process)
 
+        # Restore conversation history if this is a resumed session
+        if restore_messages:
+            await self._restore_session_history(process, restore_messages)
+
         # Save to store
         self.session_store.save(session)
 
@@ -113,6 +118,61 @@ class SessionRouter:
 
         logger.info(f"Created new session {session_id} for user {user_id}")
         return session
+
+    async def _restore_session_history(
+        self, process: "ClaudeCodeProcess", messages: list[dict[str, Any]]
+    ) -> None:
+        """Restore conversation history by replaying messages to Claude Code.
+
+        This sends the previous conversation history as context so Claude Code
+        can maintain continuity after a session restart.
+        """
+        if not messages:
+            return
+
+        logger.info(f"Restoring {len(messages)} messages to Claude Code session")
+
+        # Format conversation history as a system message
+        history_parts = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                content = " ".join(
+                    b.get("text", "") for b in content if b.get("type") == "text"
+                )
+            history_parts.append(f"{role.upper()}: {content}")
+
+        history_text = "\n\n".join(history_parts)
+        restore_prompt = (
+            f"[恢复会话历史 - 请记住以下对话内容]\n\n{history_text}\n\n"
+            f"以上是之前的对话历史，请基于这些上下文继续对话。"
+        )
+
+        try:
+            # Send history as a single message to restore context
+            response_parts = []
+            async for event in process.send_message(restore_prompt):
+                msg_type = event.get("type")
+                if msg_type == "content":
+                    content_block = event.get("content", [])
+                    if isinstance(content_block, list):
+                        for block in content_block:
+                            if block.get("type") == "text":
+                                response_parts.append(block.get("text", ""))
+                    elif isinstance(content_block, dict) and content_block.get("type") == "text":
+                        response_parts.append(content_block.get("text", ""))
+                elif msg_type == "result":
+                    result = event.get("result", "")
+                    if result:
+                        response_parts.append(result)
+
+            response = "".join(response_parts)
+            logger.info(f"History restore response: {len(response)} chars")
+        except Exception as e:
+            logger.error(f"Failed to restore session history: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     async def switch_session(self, user_id: str, session_id: str) -> bool:
         """Switch to an existing session."""
@@ -176,11 +236,19 @@ class SessionRouter:
         else:
             session = self._sessions.get(session_id)
 
+        # Track if we're restoring a session (to replay history)
+        restore_messages = []
+        old_session_id = session_id
+
         if not session or not session.is_active:
             logger.info(f"Session {session_id}: is_active check failed (session={session}, active={session.is_active if session else 'N/A'})")
+            # Save messages from the inactive session before cleanup
+            if session and session.messages:
+                restore_messages = list(session.messages)
+                logger.info(f"Saving {len(restore_messages)} messages from inactive session {old_session_id}")
             # Try to resume or create new
             try:
-                session = await self.create_session(user_id)
+                session = await self.create_session(user_id, restore_messages=restore_messages)
                 session_id = session.session_id
             except RuntimeError as e:
                 logger.error(f"Failed to create session: {e}")
