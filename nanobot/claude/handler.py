@@ -23,7 +23,7 @@ class ClaudeMessageHandler:
         self.config = config
         self.bus = bus
         self.router = router
-        self._enabled = True  # Master switch for Claude Code
+        self._enabled = config.enabled  # Master switch for Claude Code (default off)
 
     def is_enabled(self) -> bool:
         """Check if Claude Code is enabled."""

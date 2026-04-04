@@ -43,6 +43,8 @@ class AndroidConfig(Base):
     asr_url: str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel"
     asr_app_id: str = ""  # 应用ID (对应 X-Api-App-Key)
     asr_access_key: str = ""  # 访问密钥 (对应 X-Api-Access-Key)
+    history_days: int = 10  # 保留多少天历史
+    history_page_size: int = 10  # 每次加载多少条
 
 
 class FeishuConfig(Base):

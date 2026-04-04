@@ -451,34 +451,34 @@ def gateway(
         return response
     cron.on_job = on_cron_job
 
-    # Initialize Claude Code handler if enabled
+    # Initialize Claude Code handler
     claude_handler = None
-    if config.channels.claude_code.enabled:
-        from nanobot.claude.handler import ClaudeMessageHandler
-        from nanobot.claude.router import SessionRouter
-        from nanobot.claude.session import SessionStore
+    from nanobot.claude.handler import ClaudeMessageHandler
+    from nanobot.claude.router import SessionRouter
+    from nanobot.claude.session import SessionStore
 
+    if config.channels.claude_code.enabled:
         console.print("[cyan]Claude Code remote control enabled[/cyan]")
 
-        # Create session store
-        session_store = SessionStore(config.session_dir_path)
+    # Create session store
+    session_store = SessionStore(config.session_dir_path)
 
-        # Create session router
-        session_router = SessionRouter(
-            config=config.channels.claude_code,
-            bus=bus,
-            session_store=session_store,
-        )
+    # Create session router
+    session_router = SessionRouter(
+        config=config.channels.claude_code,
+        bus=bus,
+        session_store=session_store,
+    )
 
-        # Create handler
-        claude_handler = ClaudeMessageHandler(
-            config=config.channels.claude_code,
-            bus=bus,
-            router=session_router,
-        )
+    # Create handler (always created, default enabled state from config)
+    claude_handler = ClaudeMessageHandler(
+        config=config.channels.claude_code,
+        bus=bus,
+        router=session_router,
+    )
 
     # Create channel manager
-    channels = ChannelManager(config, bus, claude_handler=claude_handler)
+    channels = ChannelManager(config, bus, claude_handler=claude_handler, session_manager=session_manager)
 
     def _pick_heartbeat_target() -> tuple[str, str]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""

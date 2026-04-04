@@ -26,12 +26,13 @@ class ChannelManager:
     - Route outbound messages
     """
 
-    def __init__(self, config: Config, bus: MessageBus, claude_handler: "ClaudeMessageHandler | None" = None):
+    def __init__(self, config: Config, bus: MessageBus, claude_handler: "ClaudeMessageHandler | None" = None, session_manager=None):
         self.config = config
         self.bus = bus
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
         self.claude_handler = claude_handler
+        self.session_manager = session_manager
 
         self._init_channels()
 
@@ -56,7 +57,8 @@ class ChannelManager:
             try:
                 from nanobot.channels.android import AndroidChannel
                 self.channels["android"] = AndroidChannel(
-                    self.config.channels.android, self.bus
+                    self.config.channels.android, self.bus,
+                    session_manager=self.session_manager,
                 )
                 logger.info("Android channel enabled")
             except ImportError as e:

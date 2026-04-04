@@ -1,7 +1,7 @@
 """Message router for Claude Code sessions."""
 
 import asyncio
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
